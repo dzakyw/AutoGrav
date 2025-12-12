@@ -263,9 +263,9 @@ method = st.sidebar.selectbox("Terrain Method", ["NAGY (Akurasi Tinggi)", "HAMME
 process = st.sidebar.button("Proses Data")
 
 st.sidebar.subheader("Contoh File Input")
-st.sidebar.write("[Contoh Gravity Excel](https://files.catbox.moe/5t5ez6.xlsx)")
-st.sidebar.write("[Contoh DEM](https://files.catbox.moe/83a7y7.csv)")
-st.sidebar.write("[Contoh Koreksi Medan](https://files.catbox.moe/1zz2z1.csv)")
+st.sidebar.write("[Contoh Data Input Gravityas](https://github.com/dzakyw/AutoGrav/blob/main/sample_gravity.xlsx")
+st.sidebar.write("[Contoh Input DEM](https://github.com/dzakyw/AutoGrav/blob/main/sample_dem.csv)")
+st.sidebar.write("[Contoh Input Koreksi Medan Dari Oasis Montaj](https://github.com/dzakyw/AutoGrav/blob/main/sample_koreksi_medan.csv)")
 
 
 # ============================================================
@@ -389,6 +389,7 @@ if process:
     st.subheader("Download Hasil")
     csv = df.to_csv(index=False).encode("utf-8")
     st.download_button("Download CSV", csv, "gravcore_output.csv")
+
 
 
 
