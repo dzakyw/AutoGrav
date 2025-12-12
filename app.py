@@ -113,95 +113,75 @@ def latlon_to_utm_redfearn(lat, lon):
     northing = np.where(hemi == "south", northing + 10000000, northing)
     return easting, northing, zone, hemi
 
-
-# -------------------------------------------------------------
-# READ WORLD FILE (.tfw) FOR TIFF GEOREFERENCING
-# -------------------------------------------------------------
-def load_tfw(tfw_path):
+def load_geotiff_without_tfw(file):
     """
-    Reads .tfw (world file)
-    Format:
-        line1: pixel size x
-        line2: rotation x (ignored)
-        line3: rotation y (ignored)
-        line4: pixel size y (negative)
-        line5: x_min
-        line6: y_max
+    Load GeoTIFF using only TIFF metadata (GeoKeys).
+    Works if TIFF contains:
+      - ModelPixelScaleTag (33550)
+      - ModelTiepointTag   (33922)
     """
-    try:
-        with open(tfw_path, "r") as f:
-            lines = f.read().splitlines()
-        dx = float(lines[0])
-        dy = float(lines[3])
-        x_min = float(lines[4])
-        y_max = float(lines[5])
-        return dx, dy, x_min, y_max
-    except:
-        return None
 
+    img = Image.open(file)
+    arr = np.array(img, dtype=float)
 
+    meta = img.tag_v2
+
+    if 33550 not in meta or 33922 not in meta:
+        raise ValueError("GeoTIFF metadata not found. TIFF requires TFW or manual bounding box.")
+
+    # Metadata
+    scaleX, scaleY, _ = meta[33550]        # pixel size
+    tiepoint = meta[33922]                 # tiepoint structure
+
+    # According to GeoTIFF specs:
+    X0 = tiepoint[3]                       # model_space_X of UL corner
+    Y0 = tiepoint[4]                       # model_space_Y of UL corner
+
+    rows, cols = arr.shape
+
+    # Build coordinate grid
+    X = X0 + np.arange(cols) * scaleX
+    Y = Y0 - np.arange(rows) * abs(scaleY)
+
+    XX, YY = np.meshgrid(X, Y)
+
+    df = pd.DataFrame({
+        "Easting": XX.ravel(),
+        "Northing": YY.ravel(),
+        "Elev": arr.ravel()
+    })
+
+    return df
 # -------------------------------------------------------------
 # UNIVERSAL DEM LOADER (CSV / TXT / XYZ / TIFF / TIFF+TFW)
 # -------------------------------------------------------------
-def load_dem_universal(uploaded_file):
-    filename = uploaded_file.name.lower()
+def load_dem(file):
+    name = file.name.lower()
 
-    # -------------------------------------------
-    # CASE 1: CSV / TXT / XYZ → Try reading table
-    # -------------------------------------------
-    if filename.endswith((".csv", ".txt", ".xyz")):
+    # CSV / TXT / XYZ
+    if name.endswith((".csv", ".txt", ".xyz")):
         try:
-            df = pd.read_csv(uploaded_file)
-            if df.shape[1] >= 3:
-                df = df.iloc[:, :3]
-                df.columns = ["Lon", "Lat", "Elev"]
-            else:
-                raise ValueError
+            df = pd.read_csv(file)
         except:
-            uploaded_file.seek(0)
-            df = pd.read_csv(uploaded_file, sep=r"\s+", names=["Lon","Lat","Elev"], engine="python")
+            file.seek(0)
+            df = pd.read_csv(file, sep=r"\s+", engine="python")
 
-        # convert lon-lat to UTM
-        E, N = latlon_to_utm(df["Lat"], df["Lon"])
+        df.columns = ["Lon","Lat","Elev"][:df.shape[1]]
+        df = df.iloc[:, :3]
+
+        df["Lon"] = pd.to_numeric(df["Lon"], errors="coerce")
+        df["Lat"] = pd.to_numeric(df["Lat"], errors="coerce")
+        df["Elev"] = pd.to_numeric(df["Elev"], errors="coerce")
+        df.dropna(inplace=True)
+
+        E, N, _, _ = latlon_to_utm_manual(df["Lat"], df["Lon"])
         return pd.DataFrame({"Easting": E, "Northing": N, "Elev": df["Elev"]})
 
-    # -------------------------------------------
-    # CASE 2: TIFF or TIF
-    # -------------------------------------------
-    if filename.endswith((".tif", ".tiff")):
-        img = Image.open(uploaded_file)
-        arr = np.array(img, dtype=float)
+    # TIFF → GeoTIFF metadata
+    if name.endswith((".tif", ".tiff")):
+        return load_geotiff_without_tfw(file)
 
-        # try to load .tfw
-        tfw_path = uploaded_file.name.replace(".tif", ".tfw").replace(".tiff", ".tfw")
-
-        # But uploaded_file is in memory — look for uploaded .tfw separately
-        folder_files = [f for f in os.listdir()]  # Streamlit temp dir
-
-        tfw_file = None
-        for f in folder_files:
-            if f.lower() == tfw_path.lower():
-                tfw_file = f
-                break
-
-        if tfw_file:
-            dx, dy, x_min, y_max = load_tfw(tfw_file)
-        else:
-            raise ValueError("TIFF file uploaded but .TFW worldfile not found. Please upload .tfw or use CSV/XYZ DEM.")
-
-        nrows, ncols = arr.shape
-        x = x_min + np.arange(ncols)*dx
-        y = y_max + np.arange(nrows)*dy
-
-        XX, YY = np.meshgrid(x, y)
-
-        return pd.DataFrame({
-            "Easting": XX.ravel(),
-            "Northing": YY.ravel(),
-            "Elev": arr.ravel()
-        })
-
-    raise ValueError("Unsupported DEM format. Use CSV, XYZ, TXT, TIF, or TIFF.")
+    raise ValueError("DEM format unsupported. Use: CSV, XYZ, TXT, TIFF")
 
 # -----------------------
 # Drift solver
@@ -429,7 +409,7 @@ if run:
     dem = None
     if demf:
         try:
-            dem = load_dem_universal(demf)
+            dem = load_dem(demf)
             st.success(f"DEM loaded: {len(dem)} points.")
         except Exception as e:
             st.error(f"DEM load failed: {e}")
@@ -553,6 +533,7 @@ if run:
 
     # download
     st.download_button("Download CSV", df_all.to_csv(index=False).encode("utf-8"), "gravcore_output.csv")
+
 
 
 
