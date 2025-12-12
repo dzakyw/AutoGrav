@@ -148,7 +148,7 @@ def hammer_tc(e0,n0,z0,dem):
 # ============================================================
 # NAGY / PRISM METHOD
 # ============================================================
-
+density = density
 G_SI = 6.67430e-11
 M2MGAL = 1e5
 
@@ -171,7 +171,7 @@ def prism_term(x1,x2,y1,y2,z1,z2,px,py,pz):
     return g
 
 
-def nagy_tc(e0,n0,z0,dem,maxr=10000,density=float(input("Nilai Density Koreksi Terrain:")),cell=None):
+def nagy_tc(e0,n0,z0,dem,density,maxr=10000,cell=None):
     dx = dem["Easting"]-e0
     dy = dem["Northing"]-n0
     r = np.sqrt(dx*dx + dy*dy)
@@ -257,6 +257,7 @@ grav = st.sidebar.file_uploader("Gravity Excel Multi-hari", type=["xlsx"])
 kmf  = st.sidebar.file_uploader("Koreksi Medan Manual", type=["csv","xlsx"])
 demf = st.sidebar.file_uploader("DEM Lon,Lat,Elev", type=["csv","txt","xyz","xlsx"])
 
+density = st.sidebar.number_input("Density", value=0.0)
 G_base = st.sidebar.number_input("G_base (mGal)", value=0.0)
 method = st.sidebar.selectbox("Terrain Method", ["NAGY (High Accuracy)", "HAMMER (Fast)"])
 process = st.sidebar.button("Proses Data")
@@ -388,6 +389,7 @@ if process:
     st.subheader("Download Hasil")
     csv = df.to_csv(index=False).encode("utf-8")
     st.download_button("Download CSV", csv, "gravcore_output.csv")
+
 
 
 
