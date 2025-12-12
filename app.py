@@ -227,7 +227,7 @@ def load_dem(filelike):
 st.markdown(
     f"""
     <div style="display:flex; align-items:center;">
-        <img src="https://raw.githubusercontent.com/dzakyw/AutoGrav/main/logo esdm.png" style="width:600px; margin-right:20px;">
+        <img src="https://raw.githubusercontent.com/dzakyw/AutoGrav/main/logo esdm.png" style="width:200px; margin-right:5px;">
         <div>
             <h2 style="margin-bottom:0;">Auto Grav Processing</h2>
             <p style="margin-top:0;">Modul Pengolahan Gravity</p>
@@ -428,6 +428,7 @@ if run:
 
     # download
     st.download_button("Download CSV", df_all.to_csv(index=False).encode("utf-8"), "gravcore_output.csv")
+
 
 
 
