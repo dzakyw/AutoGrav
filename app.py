@@ -485,7 +485,7 @@ if run:
                     tc_val = hammer_tc(e0, n0, z0, dem)
                 tc_list.append(tc_val)
                 pbar.progress(int((i+1)/nstations*100))
-                progress_text.text(f"Processing sheet {sh}: station {i+1}/{nstations}")
+                progress_text.text(f"Processing {sh}: station {i+1}/{nstations}")
             pbar.empty(); progress_text.empty()
             df["Koreksi Medan"] = tc_list
 
@@ -571,6 +571,7 @@ if run:
     # download
     st.download_button("Download CSV", df_all.to_csv(index=False).encode("utf-8"), "Hasil Perhitungan.csv")
    
+
 
 
 
