@@ -148,7 +148,7 @@ def hammer_tc(e0,n0,z0,dem):
 # ============================================================
 # NAGY / PRISM METHOD
 # ============================================================
-
+density = input(float("Nilai Density Koreksi Terrain:"))
 G_SI = 6.67430e-11
 M2MGAL = 1e5
 
@@ -171,7 +171,7 @@ def prism_term(x1,x2,y1,y2,z1,z2,px,py,pz):
     return g
 
 
-def nagy_tc(e0,n0,z0,dem,maxr=10000,density=2670,cell=None):
+def nagy_tc(e0,n0,z0,dem,maxr=10000,density,cell=None):
     dx = dem["Easting"]-e0
     dy = dem["Northing"]-n0
     r = np.sqrt(dx*dx + dy*dy)
@@ -388,3 +388,4 @@ if process:
     st.subheader("Download Hasil")
     csv = df.to_csv(index=False).encode("utf-8")
     st.download_button("Download CSV", csv, "gravcore_output.csv")
+
