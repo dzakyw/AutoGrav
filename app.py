@@ -533,11 +533,20 @@ if run:
             for i in range(nstations):
                 e0 = float(df.iloc[i]["Easting"]); n0 = float(df.iloc[i]["Northing"]); z0 = float(df.iloc[i]["Elev"])
                 if method.startswith("NAGY"):
-                    tc_val = compute_nagy_tc(e0, n0, z0, dem_df=dem if dem is not None else None,
-                                              density=density, max_radius=float(max_radius), cell_size=None, z_ref=float(z_ref))
-                else:
-                    tc_val = hammer_tc(e0, n0, z0, dem)
-                tc_list.append(tc_val)
+                    if method.startswith("NAGY"):
+                        tc_val, diag = compute_nagy_tc_debug(
+                            e0, n0, z0,
+                            dem_df=dem,
+                            density=density,
+                            max_radius=float(max_radius),
+                            cell_size=None,
+                            z_ref=float(z_ref),
+                            debug=False
+                        )
+                    else:
+                        tc_val = hammer_tc(e0, n0, z0, dem)
+                    
+                    tc_list.append(tc_val)
                 pbar.progress(int((i+1)/nstations*100))
                 progress_text.text(f"Processing {sh}: station {i+1}/{nstations}")
             pbar.empty(); progress_text.empty()
@@ -625,6 +634,7 @@ if run:
     # download
     st.download_button("Download CSV", df_all.to_csv(index=False).encode("utf-8"), "Hasil Perhitungan.csv")
    
+
 
 
 
