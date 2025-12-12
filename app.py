@@ -222,7 +222,7 @@ def load_dem(filelike):
 # -----------------------
 # UI
 # -----------------------
-st.title("GravCore – Nagy (Upgraded) Ready")
+st.title("AutoGrav - Lebih Cepat Lebih Baik")
 st.sidebar.header("Inputs")
 grav = st.sidebar.file_uploader("Gravity Excel Multi-sheet (.xlsx)", type=["xlsx"])
 demf = st.sidebar.file_uploader("DEM (Lon,Lat,Elev) optional", type=["csv","txt","xyz","xlsx"])
@@ -373,3 +373,4 @@ if run:
 
     # download
     st.download_button("Download CSV", df_all.to_csv(index=False).encode("utf-8"), "gravcore_output.csv")
+
