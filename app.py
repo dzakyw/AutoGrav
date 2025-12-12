@@ -257,8 +257,11 @@ grav = st.sidebar.file_uploader("Gravity Excel Multi-hari", type=["xlsx"])
 kmf  = st.sidebar.file_uploader("Koreksi Medan Manual", type=["csv","xlsx"])
 demf = st.sidebar.file_uploader("DEM Lon,Lat,Elev", type=["csv","txt","xyz","xlsx"])
 
-density = st.sidebar.number_input("Density Koreksi Medan", value=0.0)
-G_base = st.sidebar.number_input("G_base (mGal)", value=0.0)
+density = st.sidebar.number_input("Density Koreksi Medan (kg/m³)", value=0.0, step=10.0, format="%.1f")
+if method.startswith("NAGY") and density == 0.0:
+    st.warning("Density = 0 → koreksi medan metode Nagy akan sangat kecil (praktis 0).")
+
+G_base = st.sidebar.number_input("G Absolute pada Base", value=0.0)
 method = st.sidebar.selectbox("Tipe Koreksi Medan", ["NAGY (Akurasi Tinggi)", "HAMMER (Cepat)"])
 process = st.sidebar.button("Proses Data")
 
@@ -389,5 +392,6 @@ if process:
     st.subheader("Download Hasil")
     csv = df.to_csv(index=False).encode("utf-8")
     st.download_button("Download CSV", csv, "gravcore_output.csv")
+
 
 
