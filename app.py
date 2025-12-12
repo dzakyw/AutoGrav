@@ -521,10 +521,9 @@ if run:
     # ============================================================
     st.subheader("Plot Parasnis X–Y")
     
-    # Only valid rows
+    # Only valid rows from ALL data
     mask = df_all[["X-Parasnis", "Y-Parasnis"]].notnull().all(axis=1)
-    df_parasnis = df.loc[mask].copy()
-    
+    df_parasnis = df_all.loc[mask].copy()
     if len(df_parasnis) < 2:
         st.warning("Data tidak cukup untuk regresi Parasnis.")
     else:
@@ -572,6 +571,7 @@ if run:
     # download
     st.download_button("Download CSV", df_all.to_csv(index=False).encode("utf-8"), "Hasil Perhitungan.csv")
    
+
 
 
 
