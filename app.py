@@ -20,8 +20,8 @@ def hash_password(password: str):
 # 2. USER DATABASE (EDIT SESUAI KEBUTUHAN)
 # ---------------------------------------------
 USER_DB = {
-    "admin": hash_password("admin123"),     # ubah sesuai kebutuhan
-    "user":  hash_password("user123"),      # ubah sesuai kebutuhan
+    "admin": hash_password("admin"),     # ubah sesuai kebutuhan
+    "user":  hash_password("12345"),      # ubah sesuai kebutuhan
 }
 
 # ROLE OPSIONAL
@@ -449,6 +449,7 @@ if run:
 
     # download
     st.download_button("Download CSV", df_all.to_csv(index=False).encode("utf-8"), "gravcore_output.csv")
+
 
 
 
