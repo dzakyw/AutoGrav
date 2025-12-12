@@ -516,20 +516,6 @@ if run:
     st.dataframe(df_all.head(20))
 
     # contour plots
-    x = df_all["Easting"]; y = df_all["Northing"]
-    gx = np.linspace(x.min(), x.max(), 200); gy = np.linspace(y.min(), y.max(), 200)
-    GX, GY = np.meshgrid(gx, gy)
-    def plot_cont(z, title):
-        Z = griddata((x,y), z, (GX,GY), method="cubic")
-        fig, ax = plt.subplots(figsize=(8,6))
-        cf = ax.contourf(GX, GY, Z, 40, cmap="jet")
-        ax.scatter(x, y, c=z, cmap="jet", s=12, edgecolor="k")
-        ax.set_title(title)
-        fig.colorbar(cf, ax=ax)
-        st.pyplot(fig)
-    plot_cont(df_all["Complete Bouger Correction"], "CBA")
-    plot_cont(df_all["Simple Bouger Anomaly"], "SBA")
-    plot_cont(df_all["Elev"], "Elevation")
     # ============================================================
     # PARASNIS PLOT (X vs Y)
     # ============================================================
@@ -567,10 +553,26 @@ if run:
         st.pyplot(fig)
     
         st.success(f"Slope (K) = {slope:.5f}")
+    x = df_all["Easting"]; y = df_all["Northing"]
+    gx = np.linspace(x.min(), x.max(), 200); gy = np.linspace(y.min(), y.max(), 200)
+    GX, GY = np.meshgrid(gx, gy)
+    def plot_cont(z, title):
+        Z = griddata((x,y), z, (GX,GY), method="cubic")
+        fig, ax = plt.subplots(figsize=(8,6))
+        cf = ax.contourf(GX, GY, Z, 40, cmap="jet")
+        ax.scatter(x, y, c=z, cmap="jet", s=12, edgecolor="k")
+        ax.set_title(title)
+        fig.colorbar(cf, ax=ax)
+        st.pyplot(fig)
+    plot_cont(df_all["Complete Bouger Correction"], "CBA")
+    plot_cont(df_all["Simple Bouger Anomaly"], "SBA")
+    plot_cont(df_all["Elev"], "Elevation")
+    
 
     # download
     st.download_button("Download CSV", df_all.to_csv(index=False).encode("utf-8"), "Hasil Perhitungan.csv")
    
+
 
 
 
