@@ -219,25 +219,27 @@ def nagy_tc(e0,n0,z0,dem,maxr=10000,density=2670):
 # 6) DEM LOADER (Lon,Lat,Elev → UTM)
 # ============================================================
 
+
 def load_dem(file):
     try:
         df = pd.read_csv(file)
+        if df.shape[1] == 1:
+            raise
     except:
         file.seek(0)
-        df = pd.read_csv(file, sep=r"\s+", engine="python")
+        df = pd.read_csv(file, sep=r"\s+", engine="python", header=None)
 
     if df.shape[1] < 3:
-        raise ValueError("DEM minimal memiliki 3 kolom")
+        raise ValueError("DEM must have ≥ 3 columns")
 
-    df = df.iloc[:, :3]
-    df.columns = ["Lon","Lat","Elev"]
-
+    df = df.iloc[:,:3]
+    df.columns=["Lon","Lat","Elev"]
     df["Lon"] = pd.to_numeric(df["Lon"], errors="coerce")
     df["Lat"] = pd.to_numeric(df["Lat"], errors="coerce")
     df["Elev"] = pd.to_numeric(df["Elev"], errors="coerce")
     df.dropna(inplace=True)
 
-    E,N,_,_ = latlon_to_utm_redfearn(df["Lat"], df["Lon"])
+    E,N,_,_ = latlon_to_utm_manual(df["Lat"], df["Lon"])
     return pd.DataFrame({"Easting":E,"Northing":N,"Elev":df["Elev"]})
 
 
@@ -406,3 +408,4 @@ if process:
     st.subheader("Download Hasil")
     csv = df.to_csv(index=False).encode("utf-8")
     st.download_button("Download CSV", csv, "gravcore_output.csv")
+
