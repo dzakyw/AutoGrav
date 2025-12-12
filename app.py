@@ -236,8 +236,9 @@ def free_air(elev):
 # -----------------------
 # Hammer (unchanged)
 # -----------------------
-HAMMER_R = np.array([25,100,200,500,2000,5000])
-HAMMER_F = np.array([0.035,0.03,0.025,0.02,0.015,0.01])
+HAMMER_R = np.array([2, 6, 18, 54, 162, 486, 1458, 4374])
+HAMMER_F = np.array([0.00027, 0.00019, 0.00013, 0.00009, 0.00006, 0.00004, 0.000025, 0.000015])
+
 def hammer_tc(e0, n0, z0, dem_df):
     dx = dem_df["Easting"].to_numpy() - float(e0)
     dy = dem_df["Northing"].to_numpy() - float(n0)
@@ -634,6 +635,7 @@ if run:
     # download
     st.download_button("Download CSV", df_all.to_csv(index=False).encode("utf-8"), "Hasil Perhitungan.csv")
    
+
 
 
 
