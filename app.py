@@ -1,4 +1,4 @@
-# app.py — GravCore Streamlit (Nagy upgraded)
+
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -42,7 +42,7 @@ def authenticate(username, password):
 # 4. LOGIN PAGE (BLOCKING)
 # ---------------------------------------------
 def login_page():
-    st.title("Login to GravCore")
+    st.title("Welcome to Auto Grav")
 
     username = st.text_input("Username")
     password = st.text_input("Password", type="password")
@@ -295,8 +295,20 @@ def load_dem(filelike):
 # -----------------------
 # UI
 # -----------------------
-st.title("AutoGrav - Lebih Cepat Lebih Baik")
-st.sidebar.header("Inputs")
+
+st.markdown(
+    f"""
+    <div style="display:flex; align-items:center;">
+        <img src="{https://raw.githubusercontent.com/dzakyw/AutoGrav/main/logo esdm.png}" style="width:200px; margin-right:5px;">
+        <div>
+            <h2 style="margin-bottom:0;">Auto Grav - Semua Terasa Cepat</h2>
+        </div>
+    </div>
+    <hr>
+    """,
+    unsafe_allow_html=True
+)
+st.sidebar.header("Input Files")
 grav = st.sidebar.file_uploader("Input Gravity Multi-Sheets (.xlsx)", type=["xlsx"])
 demf = st.sidebar.file_uploader("DEM (format Lon,Lat,Elev) optional", type=["csv","txt","xyz","xlsx"])
 kmf = st.sidebar.file_uploader("Koreksi Medan manual (optional)", type=["csv","xlsx"])
@@ -449,6 +461,7 @@ if run:
 
     # download
     st.download_button("Download CSV", df_all.to_csv(index=False).encode("utf-8"), "gravcore_output.csv")
+
 
 
 
