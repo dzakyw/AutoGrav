@@ -78,6 +78,7 @@ def require_login():
     # Jika sudah login, tampilkan status & tombol logout
     st.sidebar.success(f"Logged in as: {st.session_state.username} ({st.session_state.role})")
     logout_button()
+require_login()
 
 # -----------------------
 # UTM conversion (Redfearn)
@@ -448,6 +449,7 @@ if run:
 
     # download
     st.download_button("Download CSV", df_all.to_csv(index=False).encode("utf-8"), "gravcore_output.csv")
+
 
 
 
