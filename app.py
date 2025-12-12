@@ -239,7 +239,7 @@ def load_dem(file):
     df["Elev"] = pd.to_numeric(df["Elev"], errors="coerce")
     df.dropna(inplace=True)
 
-    E,N,_,_ = latlon_to_utm_manual(df["Lat"], df["Lon"])
+    E,N,_,_ = latlon_to_utm_redfearn(df["Lat"], df["Lon"])
     return pd.DataFrame({"Easting":E,"Northing":N,"Elev":df["Elev"]})
 
 
@@ -408,4 +408,5 @@ if process:
     st.subheader("Download Hasil")
     csv = df.to_csv(index=False).encode("utf-8")
     st.download_button("Download CSV", csv, "gravcore_output.csv")
+
 
