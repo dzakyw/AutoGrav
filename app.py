@@ -518,40 +518,36 @@ if run:
         df["FAA"] = df["G_read (mGal)"] - df["Koreksi Lintang"] + df["Free Air Correction"]
 
         # terrain correction selection
-        if km_map is not None:
-            df["Koreksi Medan"] = df["Nama"].map(km_map)
-            missing = df["Koreksi Medan"].isna().sum()
-            if missing > 0:
-                st.warning(f"{missing} station(s) in sheet {sh} not in manual koreksi_medan.")
-        else:
-            # compute Nagy or Hammer from DEM
-            tc_list = []
-            nstations = len(df)
-            total_stations += nstations
-            # show a progress bar
-            progress_text = st.empty()
-            pbar = st.progress(0)
-            for i in range(nstations):
-                e0 = float(df.iloc[i]["Easting"]); n0 = float(df.iloc[i]["Northing"]); z0 = float(df.iloc[i]["Elev"])
-                if method.startswith("NAGY"):
-                    if method.startswith("NAGY"):
-                        tc_val = compute_nagy_tc_debug(
-                            e0, n0, z0,
-                            dem_df=dem,
-                            density=density,
-                            max_radius=float(max_radius),
-                            cell_size=None,
-                            z_ref=float(z_ref),
-                            debug=False
-                        )
-                    else:
-                        tc_val = hammer_tc(e0, n0, z0, dem)
-                    
-                    tc_list.append(tc_val)
-                pbar.progress(int((i+1)/nstations*100))
-                progress_text.text(f"Processing {sh}: station {i+1}/{nstations}")
-            pbar.empty(); progress_text.empty()
-            df["Koreksi Medan"] = tc_list
+        # -----------------------------------------
+        #  TERRAIN CORRECTION — INSIDE SHEET LOOP
+        # -----------------------------------------
+        tc_list = []   # PENTING: reset di sini
+        
+        nstations = len(df)
+        
+        for i in range(nstations):
+            e0 = float(df.iloc[i]["Easting"])
+            n0 = float(df.iloc[i]["Northing"])
+            z0 = float(df.iloc[i]["Elev"])
+        
+            if method.startswith("NAGY"):
+                tc_val, diag = compute_nagy_tc_debug(
+                    e0, n0, z0,
+                    dem_df=dem,
+                    density=density,
+                    max_radius=float(max_radius),
+                    cell_size=None,
+                    z_ref=float(z_ref),
+                    debug=False
+                )
+            else:
+                tc_val = hammer_tc(e0, n0, z0, dem)
+        
+            tc_list.append(tc_val)
+        
+        # 100% aman karena jumlahnya sama
+        df["Koreksi Medan"] = tc_list
+
 
         df["X-Parasnis"] = 0.04192 * df["Elev"] - df["Koreksi Medan"]
         df["Y-Parasnis"] = df["Free Air Correction"]
