@@ -530,10 +530,48 @@ if run:
     plot_cont(df_all["Complete Bouger Correction"], "CBA")
     plot_cont(df_all["Simple Bouger Anomaly"], "SBA")
     plot_cont(df_all["Elev"], "Elevation")
+    # ============================================================
+    # PARASNIS PLOT (X vs Y)
+    # ============================================================
+    st.subheader("Plot Parasnis X–Y")
+    
+    # Only valid rows
+    mask = df[["X-Parasnis", "Y-Parasnis"]].notnull().all(axis=1)
+    df_parasnis = df.loc[mask].copy()
+    
+    if len(df_parasnis) < 2:
+        st.warning("Data tidak cukup untuk regresi Parasnis.")
+    else:
+        # Extract X and Y
+        X = df_parasnis["X-Parasnis"].values
+        Y = df_parasnis["Y-Parasnis"].values
+    
+        # Regression
+        slope, intercept = np.polyfit(X, Y, 1)
+    
+        # Generate regression line
+        X_line = np.linspace(min(X), max(X), 100)
+        Y_line = slope * X_line + intercept
+    
+        # Plot
+        fig, ax = plt.subplots(figsize=(8, 6))
+        ax.scatter(X, Y, s=25, color="blue", label="Data Parasnis", alpha=0.7)
+        ax.plot(X_line, Y_line, color="red", linewidth=2, label=f"Regresi: Y = {slope:.5f} X + {intercept:.5f}")
+    
+        ax.set_xlabel("X-Parasnis (mGal)")
+        ax.set_ylabel("Y-Parasnis (mGal)")
+        ax.set_title("Diagram Parasnis (X vs Y)")
+        ax.grid(True, linestyle="--", alpha=0.5)
+        ax.legend()
+    
+        st.pyplot(fig)
+    
+        st.success(f"Slope (K) = {slope:.5f}")
 
     # download
     st.download_button("Download CSV", df_all.to_csv(index=False).encode("utf-8"), "Hasil Perhitungan.csv")
    
+
 
 
 
