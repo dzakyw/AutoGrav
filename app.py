@@ -224,17 +224,17 @@ def load_dem(filelike):
 # -----------------------
 st.title("AutoGrav - Lebih Cepat Lebih Baik")
 st.sidebar.header("Inputs")
-grav = st.sidebar.file_uploader("Gravity Excel Multi-sheet (.xlsx)", type=["xlsx"])
+grav = st.sidebar.file_uploader("Input Gravity Multi-Sheets (.xlsx)", type=["xlsx"])
 demf = st.sidebar.file_uploader("DEM (format Lon,Lat,Elev) optional", type=["csv","txt","xyz","xlsx"])
 kmf = st.sidebar.file_uploader("Koreksi Medan manual (optional)", type=["csv","xlsx"])
 G_base = st.sidebar.number_input("G Absolute di Base", value=0.0)
-method = st.sidebar.selectbox("Terrain method", ["NAGY (prism)","HAMMER"])
-density = st.sidebar.number_input("Density Koreksi Medan (kg/m³)", value=2670.0, step=10.0, format="%.1f")
-max_radius = st.sidebar.number_input("Max Radius (m) untuk Nagy", value=10000, step=1000)
+method = st.sidebar.selectbox("Metode Pengukuran Terrain", ["NAGY (prism)","HAMMER"])
+density = st.sidebar.number_input("Densitas Koreksi Medan (kg/m³)", value=2670.0, step=10.0, format="%.1f")
+max_radius = st.sidebar.number_input("Jarak Maksimum (m) untuk Nagy", value=10000, step=1000)
 z_ref = st.sidebar.number_input("z_ref (bottom prism reference, m)", value=0.0)
 run = st.sidebar.button("Run")
 
-st.sidebar.write("Notes: density typical 2670 kg/m³; increase max radius for more far-field contribution.")
+st.sidebar.write("Notes: densitas biasanya 2670 kg/m³; adjust naik jarak radius untuk mendapatkan pengukuran medan yang jauh (biasanya 5-10 km)")
 
 # validation
 if run:
@@ -373,5 +373,6 @@ if run:
 
     # download
     st.download_button("Download CSV", df_all.to_csv(index=False).encode("utf-8"), "gravcore_output.csv")
+
 
 
