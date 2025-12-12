@@ -253,6 +253,8 @@ st.title("Otomatisasi Perhitungan Gravitasi Lapangan")
 st.caption("Drift Correction • FAA • Bouguer • Hammer • Nagy • Contour Mapping")
 
 st.sidebar.header("Input Files")
+st.sidebar.subheader("G_read pada data contoh adalah pembacaan alat terkoreksi (CorrGrav), 
+Apabila menggunakan Instrument Lacoste-Romberg maka lakukan konversi skala dahulu")
 grav = st.sidebar.file_uploader("Gravity Excel Multi-hari", type=["xlsx"])
 kmf  = st.sidebar.file_uploader("Koreksi Medan Dari Oasis Montaj", type=["csv","xlsx"])
 demf = st.sidebar.file_uploader("DEM yang berisi Lon, Lat, Elev", type=["csv","txt","xyz","xlsx"])
@@ -263,7 +265,7 @@ method = st.sidebar.selectbox("Terrain Method", ["NAGY (Akurasi Tinggi)", "HAMME
 process = st.sidebar.button("Proses Data")
 
 st.sidebar.subheader("Contoh File Input")
-st.sidebar.write("[Contoh Data Input Gravityas](https://github.com/dzakyw/AutoGrav/blob/main/sample_gravity.xlsx)")
+st.sidebar.write("[Contoh Data Input Gravitasi](https://github.com/dzakyw/AutoGrav/blob/main/sample_gravity.xlsx)")
 st.sidebar.write("[Contoh Input DEM](https://github.com/dzakyw/AutoGrav/blob/main/sample_dem.csv)")
 st.sidebar.write("[Contoh Input Koreksi Medan Dari Oasis Montaj](https://github.com/dzakyw/AutoGrav/blob/main/sample_koreksi_medan.csv)")
 
@@ -389,6 +391,7 @@ if process:
     st.subheader("Download Hasil")
     csv = df.to_csv(index=False).encode("utf-8")
     st.download_button("Download CSV", csv, "gravcore_output.csv")
+
 
 
 
