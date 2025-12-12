@@ -254,8 +254,8 @@ st.caption("Drift Correction • FAA • Bouguer • Hammer • Nagy • Contour
 
 st.sidebar.header("Input Files")
 grav = st.sidebar.file_uploader("Gravity Excel Multi-hari", type=["xlsx"])
-kmf  = st.sidebar.file_uploader("Koreksi Medan Manual", type=["csv","xlsx"])
-demf = st.sidebar.file_uploader("DEM Lon,Lat,Elev", type=["csv","txt","xyz","xlsx"])
+kmf  = st.sidebar.file_uploader("Koreksi Medan Dari Oasis Montaj", type=["csv","xlsx"])
+demf = st.sidebar.file_uploader("DEM yang berisi Lon, Lat, Elev", type=["csv","txt","xyz","xlsx"])
 
 density = st.sidebar.number_input("Density untuk Koreksi Medan", value=0.0)
 G_base = st.sidebar.number_input("G Absolute di Base (mGal)", value=0.0)
@@ -389,6 +389,7 @@ if process:
     st.subheader("Download Hasil")
     csv = df.to_csv(index=False).encode("utf-8")
     st.download_button("Download CSV", csv, "gravcore_output.csv")
+
 
 
 
