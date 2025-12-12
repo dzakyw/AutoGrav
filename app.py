@@ -456,6 +456,8 @@ if run:
         # drift
         Gmap, D = compute_drift(df, G_base)
         df["G_read (mGal)"] = df["Nama"].map(Gmap)
+        df["Drift_Component"] = df["Time"].diff().dt.total_seconds().fillna(0)/86400 * D
+
 
         # basic
         df["Koreksi Lintang"] = latitude_correction(df["Lat"])
@@ -533,6 +535,24 @@ if run:
 
     # download
     st.download_button("Download CSV", df_all.to_csv(index=False).encode("utf-8"), "gravcore_output.csv")
+    st.subheader("Download Hasil Drift & Corrections")
+    st.download_button(
+        "Download Station Gravity (Gsol)",
+        drift_df.to_csv(index=False).encode("utf-8"),
+        "station_gravity.csv"
+    )
+    
+    st.download_button(
+        "Download Drift Rate",
+        drift_rate_df.to_csv(index=False).encode("utf-8"),
+        "drift_rate.csv"
+    )
+    
+    st.download_button(
+        "Download Drift Per Observation",
+        drift_point_df.to_csv(index=False).encode("utf-8"),
+        "drift_per_observation.csv"
+    )
 
 
 
