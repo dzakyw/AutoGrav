@@ -148,7 +148,7 @@ def hammer_tc(e0,n0,z0,dem):
 # ============================================================
 # NAGY / PRISM METHOD
 # ============================================================
-density = input(float("Nilai Density Koreksi Terrain:"))
+density = float(input("Nilai Density Koreksi Terrain:"))
 G_SI = 6.67430e-11
 M2MGAL = 1e5
 
@@ -388,4 +388,5 @@ if process:
     st.subheader("Download Hasil")
     csv = df.to_csv(index=False).encode("utf-8")
     st.download_button("Download CSV", csv, "gravcore_output.csv")
+
 
