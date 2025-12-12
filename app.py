@@ -7,6 +7,93 @@ from scipy.interpolate import griddata
 import matplotlib.pyplot as plt
 import io, time
 
+import streamlit as st
+import hashlib
+
+st.markdown(
+    f"""
+    <div style="display:flex; align-items:center;">
+        <img src="https://raw.githubusercontent.com/dzakyw/AutoGrav/main/logo esdm.png" style="width:200px; margin-right:5px;">
+        <div>
+            <h2 style="margin-bottom:0;">Auto Grav Processing</h2>
+            <p style="margin-top:0;">Modul Pengolahan Gravity</p>
+        </div>
+    </div>
+    <hr>
+    """,
+    unsafe_allow_html=True
+)
+
+
+# ---------------------------------------------
+# 1. HASH FUNCTION
+# ---------------------------------------------
+def hash_password(password: str):
+    return hashlib.sha256(password.encode()).hexdigest()
+
+# ---------------------------------------------
+# 2. USER DATABASE (EDIT SESUAI KEBUTUHAN)
+# ---------------------------------------------
+USER_DB = {
+    "admin": hash_password("admin123"),     # ubah sesuai kebutuhan
+    "user":  hash_password("user123"),      # ubah sesuai kebutuhan
+}
+
+# ROLE OPSIONAL
+USER_ROLES = {
+    "admin": "admin",
+    "user": "viewer",
+}
+
+# ---------------------------------------------
+# 3. AUTHENTICATION CHECK
+# ---------------------------------------------
+def authenticate(username, password):
+    if username in USER_DB:
+        return USER_DB[username] == hash_password(password)
+    return False
+
+# ---------------------------------------------
+# 4. LOGIN PAGE (BLOCKING)
+# ---------------------------------------------
+def login_page():
+    st.title("🔐 Login to GravCore")
+
+    username = st.text_input("Username")
+    password = st.text_input("Password", type="password")
+
+    login_btn = st.button("Login")
+
+    if login_btn:
+        if authenticate(username, password):
+            st.session_state.logged_in = True
+            st.session_state.username = username
+            st.session_state.role = USER_ROLES.get(username, "viewer")
+            st.rerun()
+        else:
+            st.error("Invalid username or password")
+
+    st.stop()   # hanya menampilkan login page
+
+# ---------------------------------------------
+# 5. LOGOUT BUTTON
+# ---------------------------------------------
+def logout_button():
+    if st.sidebar.button("Logout"):
+        st.session_state.clear()
+        st.rerun()
+
+# ---------------------------------------------
+# 6. LOGIN WRAPPER
+# ---------------------------------------------
+def require_login():
+    if "logged_in" not in st.session_state or not st.session_state.logged_in:
+        login_page()
+
+    # Jika sudah login, tampilkan status & tombol logout
+    st.sidebar.success(f"Logged in as: {st.session_state.username} ({st.session_state.role})")
+    logout_button()
+
 # -----------------------
 # UTM conversion (Redfearn)
 # -----------------------
@@ -224,51 +311,6 @@ def load_dem(filelike):
 # -----------------------
 
 
-st.markdown(
-    f"""
-    <div style="display:flex; align-items:center;">
-        <img src="https://raw.githubusercontent.com/dzakyw/AutoGrav/main/logo esdm.png" style="width:200px; margin-right:5px;">
-        <div>
-            <h2 style="margin-bottom:0;">Auto Grav Processing</h2>
-            <p style="margin-top:0;">Modul Pengolahan Gravity</p>
-        </div>
-    </div>
-    <hr>
-    """,
-    unsafe_allow_html=True
-)
-
-# ===========================
-# SIMPLE LOGIN MODULE
-# ===========================
-
-# Daftar username + password
-USER_CREDENTIALS = {
-    "admin": "12345",
-    "user": "password"
-}
-
-def check_login():
-    # Bila belum login → tampilkan form login
-    if "logged_in" not in st.session_state or not st.session_state.logged_in:
-        st.title("Silakan Log In")
-
-        username = st.text_input("Username")
-        password = st.text_input("Password", type="password")
-
-        if st.button("Login"):
-            if username in USER_CREDENTIALS and USER_CREDENTIALS[username] == password:
-                st.session_state.logged_in = True
-                st.session_state.username = username
-                st.rerun()
-            else:
-                st.error("Invalid username or password")
-
-        st.stop()
-
-# Panggil login check
-check_login()
-
 # =============================
 # JIKA LOGIN SUKSES, LANJUT APP
 # =============================
@@ -428,6 +470,7 @@ if run:
 
     # download
     st.download_button("Download CSV", df_all.to_csv(index=False).encode("utf-8"), "gravcore_output.csv")
+
 
 
 
