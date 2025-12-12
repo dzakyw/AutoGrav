@@ -274,11 +274,11 @@ st.sidebar.write("[Contoh Input Koreksi Medan Dari Oasis Montaj](https://github.
 # ============================================================
 
 if process:
-
     if grav is None:
-        st.error("Upload file gravity.")
+        st.error("Upload file gravity terlebih dahulu.")
         st.stop()
 
+    # Load manual terrain correction
     if kmf:
         try:
             km = pd.read_csv(kmf)
@@ -287,39 +287,48 @@ if process:
         km["Koreksi_Medan"] = pd.to_numeric(km["Koreksi_Medan"], errors="coerce")
         km_map = km.set_index("Nama")["Koreksi_Medan"].to_dict()
     else:
-        km_map=None
+        km_map = None
 
+    # Load DEM
     if demf:
         dem = load_dem(demf)
-        st.success(f"DEM loaded: {len(dem)} points")
+        st.success(f"DEM loaded: {len(dem)} grid points")
     else:
-        dem=None
+        dem = None
+
+    # Final logic: At least one terrain source must exist
+    if (km_map is None) and (dem is None):
+        st.error("Anda harus menyediakan DEM atau koreksi medan manual.")
+        st.stop()
 
     xls = pd.ExcelFile(grav)
-    results=[]
+    all_data=[]
 
     for sh in xls.sheet_names:
         df = pd.read_excel(grav, sheet_name=sh)
 
-        req={"Nama","Time","G_read (mGal)","Lat","Lon","Elev"}
-        if not req.issubset(df.columns):
+        required={"Nama","Time","G_read (mGal)","Lat","Lon","Elev"}
+        if not required.issubset(df.columns):
             st.warning(f"Sheet {sh} dilewati (kolom tidak lengkap)")
             continue
 
-        E,N,_,_ = latlon_to_utm_manual(df["Lat"], df["Lon"])
-        df["Easting"] = E
-        df["Northing"] = N
+        # Convert to UTM
+        E,N,_,_ = latlon_to_utm_redfearn(df["Lat"], df["Lon"])
+        df["Easting"], df["Northing"] = E, N
 
-        # drift
-        Gmap, D = compute_drift(df, G_base)
-        df["G_read (mGal)"] = df["Nama"].map(Gmap)
+        # Drift correction
+        Gsol, drift = compute_drift(df, G_base)
+        df["G_read (mGal)"] = df["Nama"].map(Gsol)
 
-        # basic corrections
+        # Basic corrections
         df["Koreksi Lintang"] = latitude_correction(df["Lat"])
         df["Free Air Correction"] = free_air(df["Elev"])
         df["FAA"] = df["G_read (mGal)"] - df["Koreksi Lintang"] + df["Free Air Correction"]
 
-        # terrain
+        # ============================================================
+        # FLEXIBLE TERRAIN CORRECTION
+        # ============================================================
+
         if km_map is not None:
             # PRIORITAS: gunakan MANUAL
             df["Koreksi Medan"] = df["Nama"].map(km_map)
@@ -344,16 +353,19 @@ if process:
             st.error("Tidak ada sumber koreksi medan.")
             st.stop()
 
+        # Parasnis
         df["X-Parasnis"] = 0.04192*df["Elev"] - df["Koreksi Medan"]
         df["Y-Parasnis"] = df["Free Air Correction"]
         df["Hari"] = sh
-        results.append(df)
 
-    if len(results)==0:
+        all_data.append(df)
+
+    if not all_data:
         st.error("Tidak ada sheet valid.")
         st.stop()
 
-    df = pd.concat(results, ignore_index=True)
+    df = pd.concat(all_data, ignore_index=True)
+
 
     # slope K
     mask = df[["X-Parasnis","Y-Parasnis"]].notnull().all(axis=1)
@@ -398,6 +410,7 @@ if process:
     st.subheader("Download Hasil")
     csv = df.to_csv(index=False).encode("utf-8")
     st.download_button("Download CSV", csv, "gravcore_output.csv")
+
 
 
 
