@@ -225,9 +225,9 @@ def load_dem(filelike):
 st.title("AutoGrav - Lebih Cepat Lebih Baik")
 st.sidebar.header("Inputs")
 grav = st.sidebar.file_uploader("Gravity Excel Multi-sheet (.xlsx)", type=["xlsx"])
-demf = st.sidebar.file_uploader("DEM (Lon,Lat,Elev) optional", type=["csv","txt","xyz","xlsx"])
+demf = st.sidebar.file_uploader("DEM (format Lon,Lat,Elev) optional", type=["csv","txt","xyz","xlsx"])
 kmf = st.sidebar.file_uploader("Koreksi Medan manual (optional)", type=["csv","xlsx"])
-G_base = st.sidebar.number_input("G_base (mGal)", value=0.0)
+G_base = st.sidebar.number_input("G Absolute di Base", value=0.0)
 method = st.sidebar.selectbox("Terrain method", ["NAGY (prism)","HAMMER"])
 density = st.sidebar.number_input("Density Koreksi Medan (kg/m³)", value=2670.0, step=10.0, format="%.1f")
 max_radius = st.sidebar.number_input("Max Radius (m) untuk Nagy", value=10000, step=1000)
@@ -373,4 +373,5 @@ if run:
 
     # download
     st.download_button("Download CSV", df_all.to_csv(index=False).encode("utf-8"), "gravcore_output.csv")
+
 
