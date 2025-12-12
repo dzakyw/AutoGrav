@@ -222,7 +222,7 @@ def load_dem(filelike):
 # -----------------------
 # UI
 # -----------------------
-LOGO_ESDM = "https://raw.githubusercontent.com/dzakyw/AutoGrav/main/LOGO_ESDM.png"
+LOGO_ESDM = "https://raw.githubusercontent.com/dzakyw/AutoGrav/main/logo esdm.png"
 
 # Header kiri
 col1, col2 = st.columns([1, 5])
@@ -425,6 +425,7 @@ if run:
 
     # download
     st.download_button("Download CSV", df_all.to_csv(index=False).encode("utf-8"), "gravcore_output.csv")
+
 
 
 
