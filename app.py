@@ -522,7 +522,7 @@ if run:
     st.subheader("Plot Parasnis X–Y")
     
     # Only valid rows
-    mask = df[["X-Parasnis", "Y-Parasnis"]].notnull().all(axis=1)
+    mask = df_all[["X-Parasnis", "Y-Parasnis"]].notnull().all(axis=1)
     df_parasnis = df.loc[mask].copy()
     
     if len(df_parasnis) < 2:
@@ -572,6 +572,7 @@ if run:
     # download
     st.download_button("Download CSV", df_all.to_csv(index=False).encode("utf-8"), "Hasil Perhitungan.csv")
    
+
 
 
 
