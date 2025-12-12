@@ -534,7 +534,7 @@ if run:
                 e0 = float(df.iloc[i]["Easting"]); n0 = float(df.iloc[i]["Northing"]); z0 = float(df.iloc[i]["Elev"])
                 if method.startswith("NAGY"):
                     if method.startswith("NAGY"):
-                        tc_val, diag = compute_nagy_tc_debug(
+                        tc_val = compute_nagy_tc_debug(
                             e0, n0, z0,
                             dem_df=dem,
                             density=density,
@@ -634,6 +634,7 @@ if run:
     # download
     st.download_button("Download CSV", df_all.to_csv(index=False).encode("utf-8"), "Hasil Perhitungan.csv")
    
+
 
 
 
