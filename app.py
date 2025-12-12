@@ -6,7 +6,8 @@ from math import sqrt
 from scipy.interpolate import griddata
 import matplotlib.pyplot as plt
 import io, time
-
+from PIL import Image
+import os
 import streamlit as st
 import hashlib
 
@@ -552,6 +553,7 @@ if run:
 
     # download
     st.download_button("Download CSV", df_all.to_csv(index=False).encode("utf-8"), "gravcore_output.csv")
+
 
 
 
