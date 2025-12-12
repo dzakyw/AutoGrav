@@ -236,7 +236,7 @@ run = st.sidebar.button("Run")
 
 st.sidebar.write("Notes: densitas biasanya 2670 kg/m³; adjust naik jarak radius untuk mendapatkan pengukuran medan yang jauh (biasanya 5-10 km)")
 st.sidebar.subheader("Contoh File Input") 
-st.sidebar.write("[Contoh Data Input Gravity](https://raw.githubusercontent.com/dzakyw/AutoGrav/edit/main/sample_gravity.xlsx)") 
+st.sidebar.write("[Contoh Data Input Gravity](https://github.com/dzakyw/AutoGrav/blob/9bb43e1559c823350f2371360309d84eaab5ea38/sample_gravity.xlsx)") 
 st.sidebar.write("[Contoh DEM](https://raw.githubusercontent.com/dzakyw/AutoGrav/edit/main/sample_dem.csv)") 
 st.sidebar.write("[Contoh Koreksi Medan](https://raw.githubusercontent.com/dzakyw//AutoGrav/edit/main/sample_koreksi_medan.csv)")
 # validation
@@ -376,6 +376,7 @@ if run:
 
     # download
     st.download_button("Download CSV", df_all.to_csv(index=False).encode("utf-8"), "gravcore_output.csv")
+
 
 
 
