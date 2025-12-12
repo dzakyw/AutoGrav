@@ -249,7 +249,7 @@ def load_dem(file):
 # STREAMLIT UI
 # ============================================================
 
-st.title("GravCore – Streamlit Edition (Cloud-Ready)")
+st.title("Otomatisasi Perhitungan Gravitasi Lapangan")
 st.caption("Drift Correction • FAA • Bouguer • Hammer • Nagy • Contour Mapping")
 
 st.sidebar.header("Input Files")
@@ -258,8 +258,8 @@ kmf  = st.sidebar.file_uploader("Koreksi Medan Manual", type=["csv","xlsx"])
 demf = st.sidebar.file_uploader("DEM Lon,Lat,Elev", type=["csv","txt","xyz","xlsx"])
 
 density = st.sidebar.number_input("Density", value=0.0)
-G_base = st.sidebar.number_input("G_base (mGal)", value=0.0)
-method = st.sidebar.selectbox("Terrain Method", ["NAGY (High Accuracy)", "HAMMER (Fast)"])
+G_base = st.sidebar.number_input("G Absolute di Base (mGal)", value=0.0)
+method = st.sidebar.selectbox("Terrain Method", ["NAGY (Akurasi Tinggi)", "HAMMER (Lebih Cepat)"])
 process = st.sidebar.button("Proses Data")
 
 st.sidebar.subheader("Contoh File Input")
@@ -389,6 +389,7 @@ if process:
     st.subheader("Download Hasil")
     csv = df.to_csv(index=False).encode("utf-8")
     st.download_button("Download CSV", csv, "gravcore_output.csv")
+
 
 
 
