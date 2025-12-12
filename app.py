@@ -42,7 +42,7 @@ def authenticate(username, password):
 # 4. LOGIN PAGE (BLOCKING)
 # ---------------------------------------------
 def login_page():
-    st.title("🔐 Login to GravCore")
+    st.title("Login to GravCore")
 
     username = st.text_input("Username")
     password = st.text_input("Password", type="password")
@@ -76,7 +76,7 @@ def require_login():
         login_page()
 
     # Jika sudah login, tampilkan status & tombol logout
-    st.sidebar.success(f"Logged in as: {st.session_state.username} ({st.session_state.role})")
+    st.sidebar.success(f"Logged in as: {st.session_state.username}")
     logout_button()
 require_login()
 
@@ -449,6 +449,7 @@ if run:
 
     # download
     st.download_button("Download CSV", df_all.to_csv(index=False).encode("utf-8"), "gravcore_output.csv")
+
 
 
 
