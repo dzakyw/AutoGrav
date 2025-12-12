@@ -251,7 +251,7 @@ USER_CREDENTIALS = {
 def check_login():
     # Bila belum login → tampilkan form login
     if "logged_in" not in st.session_state or not st.session_state.logged_in:
-        st.title("Login Required")
+        st.title("Silakan Log In")
 
         username = st.text_input("Username")
         password = st.text_input("Password", type="password")
@@ -428,6 +428,7 @@ if run:
 
     # download
     st.download_button("Download CSV", df_all.to_csv(index=False).encode("utf-8"), "gravcore_output.csv")
+
 
 
 
