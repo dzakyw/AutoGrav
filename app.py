@@ -320,8 +320,17 @@ if process:
         df["FAA"] = df["G_read (mGal)"] - df["Koreksi Lintang"] + df["Free Air Correction"]
 
         # terrain
-        if dem is not None:
-            tc=[]
+        if km_map is not None:
+            # PRIORITAS: gunakan MANUAL
+            df["Koreksi Medan"] = df["Nama"].map(km_map)
+
+            missing = df["Koreksi Medan"].isna().sum()
+            if missing > 0:
+                st.warning(f"{missing} stasiun tidak ada pada koreksi medan manual.")
+
+        elif dem is not None:
+            # fallback: pakai DEM
+            tc = []
             for i in range(len(df)):
                 e0,n0,z0 = df.iloc[i][["Easting","Northing","Elev"]]
                 if method.startswith("NAGY"):
@@ -330,11 +339,10 @@ if process:
                     tc_val = hammer_tc(e0,n0,z0, dem)
                 tc.append(tc_val)
             df["Koreksi Medan"] = tc
+
         else:
-            if km_map is None:
-                st.error("Tidak ada DEM atau koreksi medan manual.")
-                st.stop()
-            df["Koreksi Medan"] = df["Nama"].map(km_map)
+            st.error("Tidak ada sumber koreksi medan.")
+            st.stop()
 
         df["X-Parasnis"] = 0.04192*df["Elev"] - df["Koreksi Medan"]
         df["Y-Parasnis"] = df["Free Air Correction"]
@@ -390,6 +398,7 @@ if process:
     st.subheader("Download Hasil")
     csv = df.to_csv(index=False).encode("utf-8")
     st.download_button("Download CSV", csv, "gravcore_output.csv")
+
 
 
 
