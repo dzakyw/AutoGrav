@@ -222,6 +222,42 @@ def load_dem(filelike):
 # -----------------------
 # UI
 # -----------------------
+# ===========================
+# SIMPLE LOGIN MODULE
+# ===========================
+
+# Daftar username + password
+USER_CREDENTIALS = {
+    "admin": "12345",
+    "user": "password"
+}
+
+def check_login():
+    # Bila belum login → tampilkan form login
+    if "logged_in" not in st.session_state or not st.session_state.logged_in:
+        st.title("Login Required")
+
+        username = st.text_input("Username")
+        password = st.text_input("Password", type="password")
+
+        if st.button("Login"):
+            if username in USER_CREDENTIALS and USER_CREDENTIALS[username] == password:
+                st.session_state.logged_in = True
+                st.session_state.username = username
+                st.experimental_rerun()
+            else:
+                st.error("Invalid username or password")
+
+        st.stop()
+
+# Panggil login check
+check_login()
+
+# =============================
+# JIKA LOGIN SUKSES, LANJUT APP
+# =============================
+st.success(f"Welcome, {st.session_state.username}!")
+
 st.title("AutoGrav - Lebih Cepat Lebih Baik")
 st.sidebar.header("Inputs")
 grav = st.sidebar.file_uploader("Input Gravity Multi-Sheets (.xlsx)", type=["xlsx"])
@@ -376,6 +412,7 @@ if run:
 
     # download
     st.download_button("Download CSV", df_all.to_csv(index=False).encode("utf-8"), "gravcore_output.csv")
+
 
 
 
