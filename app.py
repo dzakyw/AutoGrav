@@ -112,6 +112,96 @@ def latlon_to_utm_redfearn(lat, lon):
     northing = np.where(hemi == "south", northing + 10000000, northing)
     return easting, northing, zone, hemi
 
+
+# -------------------------------------------------------------
+# READ WORLD FILE (.tfw) FOR TIFF GEOREFERENCING
+# -------------------------------------------------------------
+def load_tfw(tfw_path):
+    """
+    Reads .tfw (world file)
+    Format:
+        line1: pixel size x
+        line2: rotation x (ignored)
+        line3: rotation y (ignored)
+        line4: pixel size y (negative)
+        line5: x_min
+        line6: y_max
+    """
+    try:
+        with open(tfw_path, "r") as f:
+            lines = f.read().splitlines()
+        dx = float(lines[0])
+        dy = float(lines[3])
+        x_min = float(lines[4])
+        y_max = float(lines[5])
+        return dx, dy, x_min, y_max
+    except:
+        return None
+
+
+# -------------------------------------------------------------
+# UNIVERSAL DEM LOADER (CSV / TXT / XYZ / TIFF / TIFF+TFW)
+# -------------------------------------------------------------
+def load_dem_universal(uploaded_file):
+    filename = uploaded_file.name.lower()
+
+    # -------------------------------------------
+    # CASE 1: CSV / TXT / XYZ → Try reading table
+    # -------------------------------------------
+    if filename.endswith((".csv", ".txt", ".xyz")):
+        try:
+            df = pd.read_csv(uploaded_file)
+            if df.shape[1] >= 3:
+                df = df.iloc[:, :3]
+                df.columns = ["Lon", "Lat", "Elev"]
+            else:
+                raise ValueError
+        except:
+            uploaded_file.seek(0)
+            df = pd.read_csv(uploaded_file, sep=r"\s+", names=["Lon","Lat","Elev"], engine="python")
+
+        # convert lon-lat to UTM
+        E, N = latlon_to_utm(df["Lat"], df["Lon"])
+        return pd.DataFrame({"Easting": E, "Northing": N, "Elev": df["Elev"]})
+
+    # -------------------------------------------
+    # CASE 2: TIFF or TIF
+    # -------------------------------------------
+    if filename.endswith((".tif", ".tiff")):
+        img = Image.open(uploaded_file)
+        arr = np.array(img, dtype=float)
+
+        # try to load .tfw
+        tfw_path = uploaded_file.name.replace(".tif", ".tfw").replace(".tiff", ".tfw")
+
+        # But uploaded_file is in memory — look for uploaded .tfw separately
+        folder_files = [f for f in os.listdir()]  # Streamlit temp dir
+
+        tfw_file = None
+        for f in folder_files:
+            if f.lower() == tfw_path.lower():
+                tfw_file = f
+                break
+
+        if tfw_file:
+            dx, dy, x_min, y_max = load_tfw(tfw_file)
+        else:
+            raise ValueError("TIFF file uploaded but .TFW worldfile not found. Please upload .tfw or use CSV/XYZ DEM.")
+
+        nrows, ncols = arr.shape
+        x = x_min + np.arange(ncols)*dx
+        y = y_max + np.arange(nrows)*dy
+
+        XX, YY = np.meshgrid(x, y)
+
+        return pd.DataFrame({
+            "Easting": XX.ravel(),
+            "Northing": YY.ravel(),
+            "Elev": arr.ravel()
+        })
+
+    raise ValueError("Unsupported DEM format. Use CSV, XYZ, TXT, TIF, or TIFF.")
+
 # -----------------------
 # Drift solver
 # -----------------------
@@ -310,9 +400,10 @@ st.markdown(
 )
 st.sidebar.header("Input Files")
 grav = st.sidebar.file_uploader("Input Gravity Multi-Sheets (.xlsx)", type=["xlsx"])
-demf = st.sidebar.file_uploader("DEM (Lon,Lat,Elev) .csv/.txt (optional)", type=["csv","txt","xyz","xlsx"])
+demf = st.sidebar.file_uploader("Upload DEM (CSV/XYZ/TIFF)", type=["csv","txt","xyz","tif","tiff"])
 kmf = st.sidebar.file_uploader("Koreksi Medan manual (optional jika punya)", type=["csv","xlsx"])
 G_base = st.sidebar.number_input("G Absolute di Base", value=0.0)
+
 method = st.sidebar.selectbox("Metode Pengukuran Terrain", ["NAGY (prism)","HAMMER"])
 density = st.sidebar.number_input("Densitas Koreksi Medan (kg/m³)", value=2670.0, step=10.0, format="%.1f")
 max_radius = st.sidebar.number_input("Jarak Maksimum (m) untuk Nagy", value=10000, step=1000)
@@ -337,10 +428,10 @@ if run:
     dem = None
     if demf:
         try:
-            dem = load_dem(demf)
-            st.success(f"DEM loaded: {len(dem)} points")
+            dem = load_dem_universal(demf)
+            st.success(f"DEM loaded: {len(dem)} points.")
         except Exception as e:
-            st.error(f"Gagal load DEM: {e}")
+            st.error(f"DEM load failed: {e}")
             st.stop()
 
     # load manual koreksi if provided
@@ -461,6 +552,7 @@ if run:
 
     # download
     st.download_button("Download CSV", df_all.to_csv(index=False).encode("utf-8"), "gravcore_output.csv")
+
 
 
 
