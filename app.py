@@ -294,13 +294,6 @@ def load_dem(filelike):
 # -----------------------
 # UI
 # -----------------------
-
-
-# =============================
-# JIKA LOGIN SUKSES, LANJUT APP
-# =============================
-st.success(f"Welcome, {st.session_state.username}!")
-
 st.title("AutoGrav - Lebih Cepat Lebih Baik")
 st.sidebar.header("Inputs")
 grav = st.sidebar.file_uploader("Input Gravity Multi-Sheets (.xlsx)", type=["xlsx"])
@@ -455,6 +448,7 @@ if run:
 
     # download
     st.download_button("Download CSV", df_all.to_csv(index=False).encode("utf-8"), "gravcore_output.csv")
+
 
 
 
