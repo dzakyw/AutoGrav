@@ -1,18 +1,22 @@
+# =============================================================
+# AutoGrav – Streamlit Application
+# =============================================================
+
 import streamlit as st
 import pandas as pd
 import numpy as np
 from math import sqrt
 from scipy.interpolate import griddata
 import matplotlib.pyplot as plt
-import io, time
 from PIL import Image
-import os
 import hashlib
+import time
 
-# ---------------------------------------------
-# LOGIN SYSTEM (UNCHANGED)
-# ---------------------------------------------
-def hash_password(password: str):
+# =============================================================
+# AUTHENTICATION
+# =============================================================
+
+def hash_password(password: str) -> str:
     return hashlib.sha256(password.encode()).hexdigest()
 
 USER_DB = {
@@ -25,15 +29,15 @@ USER_ROLES = {
     "user": "viewer",
 }
 
-def authenticate(username, password):
-    if username in USER_DB:
-        return USER_DB[username] == hash_password(password)
-    return False
+def authenticate(username: str, password: str) -> bool:
+    return username in USER_DB and USER_DB[username] == hash_password(password)
 
 def login_page():
-    st.title("Welcome to Auto Grav")
+    st.title("Welcome to AutoGrav")
+
     username = st.text_input("Username")
     password = st.text_input("Password", type="password")
+
     if st.button("Login"):
         if authenticate(username, password):
             st.session_state.logged_in = True
@@ -42,6 +46,7 @@ def login_page():
             st.rerun()
         else:
             st.error("Invalid username or password")
+
     st.stop()
 
 def logout_button():
@@ -50,213 +55,217 @@ def logout_button():
         st.rerun()
 
 def require_login():
-    if "logged_in" not in st.session_state or not st.session_state.logged_in:
+    if not st.session_state.get("logged_in", False):
         login_page()
+
     st.sidebar.success(f"Logged in as: {st.session_state.username}")
     logout_button()
 
 require_login()
 
-# ---------------------------------------------
-# UTM CONVERSION (REDFEARN) — UNCHANGED
-# ---------------------------------------------
+# =============================================================
+# COORDINATE TRANSFORM – UTM REDFEARN
+# =============================================================
+
 def latlon_to_utm_redfearn(lat, lon):
-    lat = np.asarray(lat, dtype=float)
-    lon = np.asarray(lon, dtype=float)
+    lat = np.asarray(lat, float)
+    lon = np.asarray(lon, float)
+
     a = 6378137.0
     f = 1 / 298.257223563
     k0 = 0.9996
+
     b = a * (1 - f)
     e = sqrt(1 - (b / a) ** 2)
-    e2 = e * e
+    e2 = e ** 2
+
     zone = np.floor((lon + 180) / 6) + 1
     lon0 = (zone - 1) * 6 - 180 + 3
-    lon0_rad = np.radians(lon0)
-    lat_rad = np.radians(lat)
-    lon_rad = np.radians(lon)
-    N = a / np.sqrt(1 - e2 * np.sin(lat_rad) ** 2)
-    T = np.tan(lat_rad) ** 2
-    C = (e2 / (1 - e2)) * np.cos(lat_rad) ** 2
-    A = np.cos(lat_rad) * (lon_rad - lon0_rad)
-    M = (a * ((1 - e2/4 - 3*e2*e2/64 - 5*e2**3/256) * lat_rad
-         - (3*e2/8 + 3*e2*e2/32 + 45*e2**3/1024) * np.sin(2*lat_rad)
-         + (15*e2*e2/256 + 45*e2**3/1024) * np.sin(4*lat_rad)
-         - (35*e2**3/3072) * np.sin(6*lat_rad)))
-    easting = k0 * N * (A + (1 - T + C) * A**3 / 6 + (5 - 18*T + T*T + 72*C - 58*e2) * A**5 / 120) + 500000
-    northing = k0 * (M + N * np.tan(lat_rad) * (A**2/2 + (5 - T + 9*C + 4*C*C) * A**4/24
-                   + (61 - 58*T + T*T + 600*C - 330*e2) * A**6 / 720))
-    hemi = np.where(lat >= 0, "north", "south")
-    northing = np.where(hemi == "south", northing + 10000000, northing)
-    return easting, northing, zone, hemi
+    lon0 = np.radians(lon0)
 
-# ---------------------------------------------
-# DEM LOADER (UNCHANGED)
-# ---------------------------------------------
+    lat = np.radians(lat)
+    lon = np.radians(lon)
+
+    N = a / np.sqrt(1 - e2 * np.sin(lat) ** 2)
+    T = np.tan(lat) ** 2
+    C = (e2 / (1 - e2)) * np.cos(lat) ** 2
+    A = np.cos(lat) * (lon - lon0)
+
+    M = a * (
+        (1 - e2 / 4 - 3 * e2**2 / 64 - 5 * e2**3 / 256) * lat
+        - (3 * e2 / 8 + 3 * e2**2 / 32 + 45 * e2**3 / 1024) * np.sin(2 * lat)
+        + (15 * e2**2 / 256 + 45 * e2**3 / 1024) * np.sin(4 * lat)
+        - (35 * e2**3 / 3072) * np.sin(6 * lat)
+    )
+
+    easting = (
+        k0 * N * (A + (1 - T + C) * A**3 / 6 +
+        (5 - 18 * T + T**2 + 72 * C - 58 * e2) * A**5 / 120)
+        + 500000
+    )
+
+    northing = k0 * (
+        M + N * np.tan(lat) * (
+            A**2 / 2 +
+            (5 - T + 9 * C + 4 * C**2) * A**4 / 24 +
+            (61 - 58 * T + T**2 + 600 * C - 330 * e2) * A**6 / 720
+        )
+    )
+
+    northing = np.where(lat < 0, northing + 1e7, northing)
+
+    return easting, northing, zone, None
+
+# =============================================================
+# DEM LOADER
+# =============================================================
+
+def load_geotiff_without_tfw(file):
+    img = Image.open(file)
+    arr = np.array(img, dtype=float)
+    meta = img.tag_v2
+
+    if 33550 not in meta or 33922 not in meta:
+        raise ValueError("GeoTIFF metadata missing")
+
+    scale_x, scale_y, _ = meta[33550]
+    tie = meta[33922]
+
+    X0, Y0 = tie[3], tie[4]
+    rows, cols = arr.shape
+
+    X = X0 + np.arange(cols) * scale_x
+    Y = Y0 - np.arange(rows) * abs(scale_y)
+
+    XX, YY = np.meshgrid(X, Y)
+
+    return pd.DataFrame({
+        "Easting": XX.ravel(),
+        "Northing": YY.ravel(),
+        "Elev": arr.ravel()
+    })
+
 def load_dem(file):
-    df = pd.read_csv(file)
-    df = df.iloc[:, :3]
-    df.columns = ["Lon","Lat","Elev"]
-    df["Lon"] = pd.to_numeric(df["Lon"], errors="coerce")
-    df["Lat"] = pd.to_numeric(df["Lat"], errors="coerce")
-    df["Elev"] = pd.to_numeric(df["Elev"], errors="coerce")
-    df.dropna(inplace=True)
-    E, N, _, _ = latlon_to_utm_redfearn(df["Lat"], df["Lon"])
-    return pd.DataFrame({"Easting":E,"Northing":N,"Elev":df["Elev"]})
+    name = file.name.lower()
 
-# ---------------------------------------------
-# BASIC CORRECTIONS (UNCHANGED)
-# ---------------------------------------------
+    if name.endswith((".csv", ".txt", ".xyz")):
+        try:
+            df = pd.read_csv(file)
+        except Exception:
+            file.seek(0)
+            df = pd.read_csv(file, sep=r"\s+", engine="python")
+
+        df = df.iloc[:, :3]
+        df.columns = ["Lon", "Lat", "Elev"]
+        df = df.apply(pd.to_numeric, errors="coerce").dropna()
+
+        E, N, _, _ = latlon_to_utm_redfearn(df["Lat"], df["Lon"])
+        return pd.DataFrame({"Easting": E, "Northing": N, "Elev": df["Elev"]})
+
+    if name.endswith((".tif", ".tiff")):
+        return load_geotiff_without_tfw(file)
+
+    raise ValueError("Unsupported DEM format")
+
+# =============================================================
+# GRAVITY CORRECTIONS
+# =============================================================
+
+def compute_drift(df, G_base):
+    df = df.copy()
+    df["Time"] = pd.to_datetime(df["Time"], format="%H:%M:%S")
+    df["G_read (mGal)"] = pd.to_numeric(df["G_read (mGal)"])
+
+    names = df["Nama"].tolist()
+    stations = list(dict.fromkeys(names))
+    base = stations[0]
+    unknown = stations[1:]
+
+    N = len(unknown) + 1
+    A, b = [], []
+
+    tfrac = (
+        df["Time"].dt.hour * 3600 +
+        df["Time"].dt.minute * 60 +
+        df["Time"].dt.second
+    ) / 86400
+
+    for i in range(len(df) - 1):
+        row = np.zeros(N)
+        dG = df.iloc[i + 1]["G_read (mGal)"] - df.iloc[i]["G_read (mGal)"]
+        dt = tfrac.iloc[i + 1] - tfrac.iloc[i]
+
+        c = dG
+        if names[i + 1] != base:
+            row[unknown.index(names[i + 1])] = 1
+        else:
+            c -= G_base
+
+        if names[i] != base:
+            row[unknown.index(names[i])] = -1
+        else:
+            c += G_base
+
+        row[-1] = dt
+        A.append(row)
+        b.append(c)
+
+    x, *_ = np.linalg.lstsq(np.array(A), np.array(b), rcond=None)
+
+    Gmap = {base: G_base}
+    for i, stn in enumerate(unknown):
+        Gmap[stn] = x[i]
+
+    return Gmap, x[-1]
+
 def latitude_correction(lat):
     phi = np.radians(lat)
-    return 978032.67715 * (1 + 0.0053024*np.sin(phi)**2 - 0.0000059*np.sin(2*phi)**2)
+    return 978032.67715 * (
+        1 + 0.0053024 * np.sin(phi)**2 -
+        0.0000059 * np.sin(2 * phi)**2
+    )
 
 def free_air(elev):
     return 0.3086 * elev
 
-# ---------------------------------------------
-# DRIFT SOLVER (UNCHANGED)
-# ---------------------------------------------
-def compute_drift(df, G_base):
-    df["Time"] = pd.to_datetime(df["Time"], format="%H:%M:%S")
-    frac = (df["Time"].dt.hour*3600 + df["Time"].dt.minute*60 + df["Time"].dt.second)/86400
-    names = df["Nama"].astype(str).tolist()
-    uniq = list(dict.fromkeys(names))
-    base = uniq[0]
-    unknown = [s for s in uniq if s != base]
-    A=[]; b=[]
-    for i in range(len(df)-1):
-        row = np.zeros(len(unknown)+1)
-        dG = df.iloc[i+1]["G_read (mGal)"] - df.iloc[i]["G_read (mGal)"]
-        dt = frac.iloc[i+1] - frac.iloc[i]
-        c = dG
-        if names[i+1] != base: row[unknown.index(names[i+1])] = 1
-        else: c -= G_base
-        if names[i] != base: row[unknown.index(names[i])] = -1
-        else: c += G_base
-        row[-1] = dt
-        A.append(row); b.append(c)
-    x,*_ = np.linalg.lstsq(np.array(A),np.array(b),rcond=None)
-    Gmap = {base:G_base}
-    for i,s in enumerate(unknown): Gmap[s] = x[i]
-    return Gmap
+# =============================================================
+# HAMMER TERRAIN CORRECTION
+# =============================================================
 
-# ============================================================
-# OSS TERRAIN CORRECTION — DIPERBAIKI (INI INTINYA)
-# ============================================================
-G = 6.67430e-11
-SI2MGAL = 1e5
-TWO_PI = 2*np.pi
+HAMMER_R = np.array([2, 6, 18, 54, 162, 486, 1458, 4374])
+HAMMER_F = np.array([0.00027, 0.00019, 0.00013, 0.00009,
+                     0.00006, 0.00004, 0.000025, 0.000015])
 
-def oss_dem_mass_tc(e0, n0, z0, dem_df, density, r_max=30000.0, dtheta=1.0):
-    dx = dem_df["Easting"].values - e0
-    dy = dem_df["Northing"].values - n0
-    r = np.sqrt(dx*dx + dy*dy)
-    mask = r <= r_max
+def hammer_tc(e0, n0, z0, dem):
+    dx = dem["Easting"] - e0
+    dy = dem["Northing"] - n0
+    dist = np.sqrt(dx**2 + dy**2)
 
-    dx = dx[mask]
-    dy = dy[mask]
-    r  = r[mask]
-    z  = dem_df["Elev"].values[mask]
+    tc = 0.0
+    inner = 0.0
 
-    theta = (np.degrees(np.arctan2(dy, dx)) + 360) % 360
+    for r, f in zip(HAMMER_R, HAMMER_F):
+        m = (dist >= inner) & (dist < r)
+        if m.any():
+            tc += f * (dem.loc[m, "Elev"].mean() - z0)
+        inner = r
 
-    xs = np.unique(dem_df["Easting"].values)
-    ys = np.unique(dem_df["Northing"].values)
-    dx_cell = np.median(np.diff(xs))
-    dy_cell = np.median(np.diff(ys))
-    cell_area = dx_cell * dy_cell
+    return tc
 
-    terrain = 0.0
+# =============================================================
+# UI
+# =============================================================
 
-    for th in np.arange(0, 360, dtheta):
-        m = (theta >= th) & (theta < th + dtheta)
-        if m.sum() < 5:
-            continue
-
-        ri = r[m]
-        zi = z[m]
-
-        w = 1.0 / (ri**3 + 1e-20)
-        z_m = np.sum(w * zi) / np.sum(w)
-
-        hi = zi - z_m
-        denom = (ri**2 + hi**2)**1.5
-        denom[denom == 0] = np.inf
-
-        dg = TWO_PI * G * density * np.sum(hi * cell_area / denom)
-        terrain += dg
-
-    return terrain * SI2MGAL
-
-# ---------------------------------------------
-# UI — UNCHANGED
-# ---------------------------------------------
 st.markdown("""
-<h2>AutoGrav — OSS Terrain Correction</h2>
+<div style="display:flex;align-items:center">
+<img src="https://raw.githubusercontent.com/dzakyw/AutoGrav/main/logo esdm.png" width="180">
+<h2 style="margin-left:10px">AutoGrav – Semua Terasa Cepat</h2>
+</div><hr>
 """, unsafe_allow_html=True)
 
 st.sidebar.header("Input Files")
-grav = st.sidebar.file_uploader("Gravity Excel (.xlsx)", type=["xlsx"])
-demf = st.sidebar.file_uploader("DEM CSV (Lon,Lat,Elev)", type=["csv"])
-G_base = st.sidebar.number_input("G Absolute Base", value=0.0)
-density = st.sidebar.number_input("Density (kg/m³)", value=2670.0)
-max_radius = st.sidebar.number_input("Terrain Radius (m)", value=30000)
+grav = st.sidebar.file_uploader("Gravity Excel (.xlsx)", ["xlsx"])
+demf = st.sidebar.file_uploader("DEM (CSV / XYZ / TIFF)", ["csv", "txt", "xyz", "tif", "tiff"])
+G_base = st.sidebar.number_input("G Absolute Base (mGal)", value=0.0)
+method = st.sidebar.selectbox("Terrain Method", ["HAMMER"])
 run = st.sidebar.button("Run")
-
-st.sidebar.subheader("Contoh File")
-st.sidebar.write("[Gravity Example](https://github.com/dzakyw/AutoGrav/raw/main/sample_gravity.xlsx)")
-st.sidebar.write("[DEM Example](https://github.com/dzakyw/AutoGrav/raw/main/sample_dem.csv)")
-
-# ---------------------------------------------
-# PROCESSING
-# ---------------------------------------------
-if run:
-    dem = load_dem(demf)
-    xls = pd.ExcelFile(grav)
-    all_df = []
-
-    for sh in xls.sheet_names:
-        df = pd.read_excel(grav, sheet_name=sh)
-        E,N,_,_ = latlon_to_utm_redfearn(df["Lat"], df["Lon"])
-        df["Easting"]=E; df["Northing"]=N
-
-        Gmap = compute_drift(df, G_base)
-        df["G_read (mGal)"] = df["Nama"].map(Gmap)
-
-        df["Koreksi Lintang"] = latitude_correction(df["Lat"])
-        df["Free Air Correction"] = free_air(df["Elev"])
-        df["FAA"] = df["G_read (mGal)"] - df["Koreksi Lintang"] + df["Free Air Correction"]
-
-        tc=[]
-        for i in range(len(df)):
-            tc.append(
-                oss_dem_mass_tc(
-                    df.iloc[i]["Easting"],
-                    df.iloc[i]["Northing"],
-                    df.iloc[i]["Elev"],
-                    dem,
-                    density,
-                    max_radius
-                )
-            )
-        df["Koreksi Medan"]=tc
-        df["X-Parasnis"]=0.04192*df["Elev"]-df["Koreksi Medan"]
-        df["Y-Parasnis"]=df["Free Air Correction"]
-        df["Hari"]=sh
-        all_df.append(df)
-
-    out = pd.concat(all_df, ignore_index=True)
-
-    k,_ = np.polyfit(out["X-Parasnis"], out["Y-Parasnis"], 1)
-    out["Bouger Correction"]=0.04192*k*out["Elev"]
-    out["SBA"]=out["FAA"]-out["Bouger Correction"]
-    out["CBA"]=out["SBA"]+out["Koreksi Medan"]
-
-    st.success("Selesai")
-    st.dataframe(out.head())
-
-    st.download_button(
-        "Download CSV",
-        out.to_csv(index=False).encode(),
-        "autograv_output.csv"
-    )
