@@ -253,147 +253,72 @@ def hammer_tc(e0, n0, z0, dem_df):
         inner = outer
     return float(tc)
 
-# -----------------------
-# Nagy prism — improved
-# -----------------------
-G_SI = 6.67430e-11
-M2MGAL = 1e5
+# ============================================================
+# OSS TERRAIN CORRECTION — DEM MASS INTEGRATION (PAPER STYLE)
+# ============================================================
 
-def prism_g_term(xi, yj, zk):
-    # helper for single corner terms with safe logs
-    R = np.sqrt(xi*xi + yj*yj + zk*zk) + 1e-20
-    return xi*np.log(abs(yj + R)) + yj*np.log(abs(xi + R)) - zk*np.arctan2(xi*yj, zk*R + 1e-20)
-
-def prism_vertical_attraction(x1, x2, y1, y2, z1, z2, px, py, pz):
-    # Full analytic vertical attraction term for rectangular prism
-    # returns sum_{corners} (-1)^{i+j+k} * f(xi,yj,zk)
-    X = [x1 - px, x2 - px]
-    Y = [y1 - py, y2 - py]
-    Z = [z1 - pz, z2 - pz]
-    ssum = 0.0
-    for i in range(2):
-        xi = X[i]
-        for j in range(2):
-            yj = Y[j]
-            for k in range(2):
-                zk = Z[k]
-                sign = (-1) ** (i + j + k)
-                ssum += sign * prism_g_term(xi, yj, zk)
-    return ssum
-
-def compute_nagy_tc_debug(e0, n0, z0, dem_df, density,
-                          max_radius=50000.0, cell_size=None, z_ref=None,
-                          debug=False, multiply_by_cell_area=False):
+G = 6.67430e-11       # m³ kg⁻¹ s⁻²
+SI2MGAL = 1e5         # m/s² → mGal
+def oss_dem_mass_tc(
+    e0, n0, z0,
+    dem_df,
+    density,
+    r_max=30000.0,
+    dtheta=1.0,
+    dr=50.0
+):
     """
-    Improved Nagy prism-based terrain correction (vertical attraction).
-    Returns: gz_mgal (float). If debug=True returns (gz_mgal, diag_dict).
-    Notes:
-      - dem_df must have columns 'Easting','Northing','Elev' in meters.
-      - density in kg/m^3
-      - z_ref: bottom reference (if None, set to dem_df.Elev.min() - 1000)
-      - multiply_by_cell_area: optional toggle if you want to multiply analytic term by cell area
+    Optimally Selected Sectors (OSS) terrain correction
+    DEM mass integration (following Studia Geophysica et Geodaetica, 2020)
+
+    dem_df columns: Easting, Northing, Elev (meters)
+    density: kg/m³
+    returns: terrain correction in mGal
     """
-    eps = 1e-20
-    if dem_df is None or len(dem_df)==0:
-        if debug:
-            return 0.0, {"reason":"no dem"}
-        return 0.0
 
-    # select within radius
-    dx = dem_df["Easting"].to_numpy() - float(e0)
-    dy = dem_df["Northing"].to_numpy() - float(n0)
-    r = np.sqrt(dx*dx + dy*dy)
-    dem_sel = dem_df.loc[r <= max_radius].copy()
-    if dem_sel.empty:
-        if debug:
-            return 0.0, {"reason":"no points within radius"}
-        return 0.0
+    # station-centered coordinates
+    dx = dem_df["Easting"].values - e0
+    dy = dem_df["Northing"].values - n0
+    dz = dem_df["Elev"].values - z0
 
-    # infer cell
-    if cell_size is None:
-        xs = np.sort(np.unique(dem_sel["Easting"].to_numpy()))
-        ys = np.sort(np.unique(dem_sel["Northing"].to_numpy()))
-        if len(xs) > 1:
-            dx_med = np.median(np.diff(xs))
-        else:
-            dx_med = 25.0
-        if len(ys) > 1:
-            dy_med = np.median(np.diff(ys))
-        else:
-            dy_med = dx_med
-        cell = max(dx_med, dy_med)
-    else:
-        cell = float(cell_size)
+    r = np.sqrt(dx**2 + dy**2)
+    theta = (np.degrees(np.arctan2(dy, dx)) + 360) % 360
 
-    if z_ref is None:
-        z_ref_use = float(dem_df["Elev"].min()) - 1000.0
-    else:
-        z_ref_use = float(z_ref)
+    mask_global = r <= r_max
+    dx = dx[mask_global]
+    dy = dy[mask_global]
+    dz = dz[mask_global]
+    r = r[mask_global]
+    theta = theta[mask_global]
 
-    # bin to grid cells (coarse)
-    minx = dem_sel["Easting"].min() - 0.5*cell
-    miny = dem_sel["Northing"].min() - 0.5*cell
-    dem_sel["ix"] = ((dem_sel["Easting"] - minx) / cell).astype(int)
-    dem_sel["iy"] = ((dem_sel["Northing"] - miny) / cell).astype(int)
-    grouped = dem_sel.groupby(["ix","iy"])["Elev"].mean().reset_index()
-    if grouped.empty:
-        if debug:
-            return 0.0, {"reason":"grouped empty"}
-        return 0.0
+    # === estimate DEM cell area ===
+    xs = np.unique(dem_df["Easting"].values)
+    ys = np.unique(dem_df["Northing"].values)
+    dx_cell = np.median(np.diff(xs)) if len(xs) > 1 else 30.0
+    dy_cell = np.median(np.diff(ys)) if len(ys) > 1 else dx_cell
+    cell_area = dx_cell * dy_cell
 
-    # helper corner term (same as earlier but robust)
-    def corner_term(xi, yj, zk):
-        R = np.sqrt(xi*xi + yj*yj + zk*zk) + eps
-        # keep args for logs positive
-        a = abs(yj + R)
-        b = abs(xi + R)
-        val = xi * np.log(a) + yj * np.log(b) - zk * np.arctan2(xi*yj, zk*R + eps)
-        return val
+    terrain_total = 0.0
 
-    gz_sum = 0.0
-    # loop prisms
-    for _, row in grouped.iterrows():
-        ix = int(row["ix"]); iy = int(row["iy"])
-        ztop = float(row["Elev"])
-        x1 = minx + ix*cell
-        x2 = x1 + cell
-        y1 = miny + iy*cell
-        y2 = y1 + cell
-        # vertical bounds
-        z1 = float(z_ref_use)
-        z2 = ztop
-        # sum over 8 corners
-        s_local = 0.0
-        for i in (0,1):
-            xi = (x1 if i==0 else x2) - float(e0)
-            for j in (0,1):
-                yj = (y1 if j==0 else y2) - float(n0)
-                for k in (0,1):
-                    zk = (z1 if k==0 else z2) - float(z0)
-                    sign = (-1)**(i+j+k)
-                    s_local += sign * corner_term(xi, yj, zk)
-        # optionally multiply by cell area? usually NOT needed with analytic prism expression.
-        if multiply_by_cell_area:
-            s_local *= (cell*cell)
-        gz_sum += s_local
+    # ===============================
+    # ANGULAR OSS (Hammer-style)
+    # ===============================
+    for th in np.arange(0, 360, dtheta):
+        m = (theta >= th) & (theta < th + dtheta)
+        if m.sum() == 0:
+            continue
 
-    gz_si = G_SI * float(density) * gz_sum    # in m/s^2
-    gz_mgal = gz_si * 1e5
+        ri = r[m]
+        dzi = dz[m]
 
-    if debug:
-        diag = {
-            "n_points_selected": int(len(dem_sel)),
-            "n_grouped": int(len(grouped)),
-            "cell_m": cell,
-            "z_ref": z_ref_use,
-            "gz_sum_raw": gz_sum,
-            "gz_si": gz_si,
-            "gz_mgal": gz_mgal
-        }
-        return float(gz_mgal), diag
+        # DEM mass integration
+        denom = (ri**2 + dzi**2)**1.5
+        denom[denom == 0] = np.inf
 
-    return float(gz_mgal)
+        dG = G * density * np.sum(dzi * cell_area / denom)
+        terrain_total += dG
 
+    return terrain_total * SI2MGAL
 
 # -----------------------
 # DEM loader robust
@@ -441,8 +366,18 @@ kmf = st.sidebar.file_uploader("Koreksi Medan manual (optional jika punya)", typ
 G_base = st.sidebar.number_input("G Absolute di Base", value=0.0)
 
 method = st.sidebar.selectbox("Metode Pengukuran Terrain", ["NAGY (prism)","HAMMER"])
-density = st.sidebar.number_input("Densitas Koreksi Medan (kg/m³)", value=2670.0, step=10.0, format="%.1f")
-max_radius = st.sidebar.number_input("Jarak Maksimum (m) untuk Nagy", value=10000, step=1000)
+density = st.sidebar.number_input(
+    "Density (kg/m³)",
+    value=2670.0,
+    step=10.0
+)
+
+max_radius = st.sidebar.number_input(
+    "Max terrain radius (m)",
+    value=30000,
+    step=5000
+)
+
 z_ref = st.sidebar.number_input("z_ref (bottom prism reference, m)", value=0.0)
 run = st.sidebar.button("Run")
 
@@ -519,10 +454,10 @@ if run:
 
         # terrain correction selection
         # -----------------------------------------
-        #  TERRAIN CORRECTION — INSIDE SHEET LOOP
+        # TERRAIN CORRECTION — OSS DEM MASS
         # -----------------------------------------
-        tc_list = []   # PENTING: reset di sini
         
+        tc_list = []
         nstations = len(df)
         
         for i in range(nstations):
@@ -531,24 +466,20 @@ if run:
             z0 = float(df.iloc[i]["Elev"])
         
             if method.startswith("NAGY"):
-                tc_val, diag = compute_nagy_tc_debug(
+                tc_val = oss_dem_mass_tc(
                     e0, n0, z0,
                     dem_df=dem,
                     density=density,
-                    max_radius=float(max_radius),
-                    cell_size=None,
-                    z_ref=float(z_ref),
-                    debug=False
+                    r_max=float(max_radius),
+                    dtheta=1.0,   # sesuai permintaan Anda
+                    dr=50.0
                 )
             else:
                 tc_val = hammer_tc(e0, n0, z0, dem)
         
             tc_list.append(tc_val)
         
-        # 100% aman karena jumlahnya sama
         df["Koreksi Medan"] = tc_list
-
-
         df["X-Parasnis"] = 0.04192 * df["Elev"] - df["Koreksi Medan"]
         df["Y-Parasnis"] = df["Free Air Correction"]
         df["Hari"] = sh
@@ -631,6 +562,7 @@ if run:
     # download
     st.download_button("Download CSV", df_all.to_csv(index=False).encode("utf-8"), "Hasil Perhitungan.csv")
    
+
 
 
 
