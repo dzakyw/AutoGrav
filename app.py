@@ -775,7 +775,7 @@ st.markdown(
 
 st.sidebar.header("Input Files")
 grav = st.sidebar.file_uploader("Input Gravity Multi-Sheets (.xlsx)", type=["xlsx"])
-demf = st.sidebar.file_uploader("Upload DEM (CSV/XYZ/TIFF)", type=["csv","txt","xyz","tif","tiff"])
+demf = st.sidebar.file_uploader("Upload DEM (CSV/XYZ)", type=["csv","txt","xyz"])
 kmf = st.sidebar.file_uploader("Koreksi Medan manual (optional jika punya)", type=["csv","xlsx"])
 G_base = st.sidebar.number_input("G Absolute di Base", value=0.0)
 
@@ -1109,3 +1109,4 @@ if run:
     # download
     st.download_button("Download CSV", df_all.to_csv(index=False).encode("utf-8"),
                       "Hasil Perhitungan.csv")
+
