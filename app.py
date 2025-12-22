@@ -262,147 +262,543 @@ def hammer_tc(e0, n0, z0, dem_df):
 # -----------------------
 # Nagy prism — improved
 # -----------------------
-G_SI = 6.67430e-11
-M2MGAL = 1e5
+import numpy as np
+import pandas as pd
+from math import sqrt
+import matplotlib.pyplot as plt
 
-def prism_g_term(xi, yj, zk):
-    # helper for single corner terms with safe logs
-    R = np.sqrt(xi*xi + yj*yj + zk*zk) + 1e-20
-    return xi*np.log(abs(yj + R)) + yj*np.log(abs(xi + R)) - zk*np.arctan2(xi*yj, zk*R + 1e-20)
+# ============================================================
+# KONSTANTA & KERNEL DASAR SESUAI PAPER
+# ============================================================
+G = 6.67430e-11           # m^3 kg^-1 s^-2
+RHO = 2670.0              # kg/m^3 (2.67 g/cm^3)
+NANO_TO_MGAL = 1e-6       # 1 nGal = 1e-6 mGal
+MICRO_TO_MGAL = 1e-3      # 1 μGal = 1e-3 mGal
 
-def prism_vertical_attraction(x1, x2, y1, y2, z1, z2, px, py, pz):
-    # Full analytic vertical attraction term for rectangular prism
-    # returns sum_{corners} (-1)^{i+j+k} * f(xi,yj,zk)
-    X = [x1 - px, x2 - px]
-    Y = [y1 - py, y2 - py]
-    Z = [z1 - pz, z2 - pz]
-    
-    ssum = 0.0
-    for i in range(2):
-        xi = X[i]
-        for j in range(2):
-            yj = Y[j]
-            for k in range(2):
-                zk = Z[k]
-                sign = (-1) ** (i + j + k)
-                ssum += sign * prism_g_term(xi, yj, zk)
-    return ssum
-
-def compute_nagy_tc_debug(e0, n0, z0, dem_df, density, max_radius=50000.0,
-                         cell_size=None, z_ref=None, debug=False,
-                         multiply_by_cell_area=False):
+def terrain_effect_cylindrical_sector(R1, R2, theta1, theta2, z):
     """
-    Improved Nagy prism-based terrain correction (vertical attraction).
-    Returns: gz_mgal (float). If debug=True returns (gz_mgal, diag_dict).
+    PERSAMAAN (1) dari paper: Δg_T = GρΔθ[R2-R1+√(R1²+z²)-√(R2²+z²)]
     
-    Notes:
-    - dem_df must have columns 'Easting','Northing','Elev' in meters.
-    - density in kg/m^3
-    - z_ref: bottom reference (if None, set to dem_df.Elev.min() - 1000)
-    - multiply_by_cell_area: optional toggle if you want to multiply analytic term by cell area
+    Parameters:
+    -----------
+    R1, R2 : float
+        Inner and outer radius (meters)
+    theta1, theta2 : float
+        Azimuth angles in degrees
+    z : float
+        Height difference: station_elevation - sector_average_elevation (meters)
+    
+    Returns:
+    --------
+    delta_g : float
+        Terrain effect in mGal
     """
-    eps = 1e-20
-    if dem_df is None or len(dem_df)==0:
-        if debug:
-            return 0.0, {"reason":"no dem"}
-        return 0.0
+    # Convert angles to radians
+    theta1_rad = np.radians(theta1)
+    theta2_rad = np.radians(theta2)
+    Delta_theta = theta2_rad - theta1_rad
     
-    # select within radius
-    dx = dem_df["Easting"].to_numpy() - float(e0)
-    dy = dem_df["Northing"].to_numpy() - float(n0)
-    r = np.sqrt(dx*dx + dy*dy)
-    dem_sel = dem_df.loc[r <= max_radius].copy()
-    if dem_sel.empty:
-        if debug:
-            return 0.0, {"reason":"no points within radius"}
-        return 0.0
+    # Calculate terrain effect in SI units (m/s²)
+    term = (R2 - R1) + np.sqrt(R1**2 + z**2) - np.sqrt(R2**2 + z**2)
+    delta_g_si = G * RHO * Delta_theta * term
     
-    # infer cell
-    if cell_size is None:
-        xs = np.sort(np.unique(dem_sel["Easting"].to_numpy()))
-        ys = np.sort(np.unique(dem_sel["Northing"].to_numpy()))
-        if len(xs) > 1:
-            dx_med = np.median(np.diff(xs))
-        else:
-            dx_med = 25.0
-        if len(ys) > 1:
-            dy_med = np.median(np.diff(ys))
-        else:
-            dy_med = dx_med
-        cell = max(dx_med, dy_med)
-    else:
-        cell = float(cell_size)
+    # Convert to mGal (1 mGal = 10^-5 m/s²)
+    return delta_g_si * 1e5
+
+def optimized_elevation(z_avg, deviations, R1, R2, Delta_theta, r_points):
+    """
+    PERSAMAAN (8) dari paper: Optimized elevation z'
+    z'² = z² + sgn(l) * (R2R1/(R2-R1)) * (2zl + l²) / (Δθ * 2r³)
     
-    if z_ref is None:
-        z_ref_use = float(dem_df["Elev"].min()) - 1000.0
-    else:
-        z_ref_use = float(z_ref)
+    Parameters:
+    -----------
+    z_avg : float
+        Average elevation difference in sector
+    deviations : array
+        l values: deviations of each point from z_avg
+    R1, R2 : float
+        Inner and outer radii of sector
+    Delta_theta : float
+        Angular width in radians
+    r_points : array
+        Radial distances of each point
     
-    # bin to grid cells (coarse)
-    minx = dem_sel["Easting"].min() - 0.5*cell
-    miny = dem_sel["Northing"].min() - 0.5*cell
-    dem_sel["ix"] = ((dem_sel["Easting"] - minx) / cell).astype(int)
-    dem_sel["iy"] = ((dem_sel["Northing"] - miny) / cell).astype(int)
-    grouped = dem_sel.groupby(["ix","iy"])["Elev"].mean().reset_index()
-    if grouped.empty:
-        if debug:
-            return 0.0, {"reason":"grouped empty"}
-        return 0.0
+    Returns:
+    --------
+    z_opt : float
+        Optimized elevation for the sector
+    """
+    if len(deviations) == 0:
+        return z_avg
     
-    # helper corner term (same as earlier but robust)
-    def corner_term(xi, yj, zk):
-        R = np.sqrt(xi*xi + yj*yj + zk*zk) + eps
-        # keep args for logs positive
-        a = abs(yj + R)
-        b = abs(xi + R)
-        val = xi * np.log(a) + yj * np.log(b) - zk * np.arctan2(xi*yj, zk*R + eps)
-        return val
+    # Avoid division by zero
+    if R2 == R1 or Delta_theta == 0:
+        return z_avg
     
-    gz_sum = 0.0
-    # loop prisms
-    for _, row in grouped.iterrows():
-        ix = int(row["ix"]); iy = int(row["iy"])
-        ztop = float(row["Elev"])
-        x1 = minx + ix*cell
-        x2 = x1 + cell
-        y1 = miny + iy*cell
-        y2 = y1 + cell
-        # vertical bounds
-        z1 = float(z_ref_use)
-        z2 = ztop
+    # Calculate weighted sum according to Eq. (8)
+    numerator_sum = 0.0
+    denominator_sum = 0.0
+    
+    for l, r in zip(deviations, r_points):
+        if r < 1e-10:  # Avoid division by zero
+            continue
+            
+        sign_l = 1.0 if l >= 0 else -1.0
+        numerator = 2 * z_avg * l + l**2
+        denominator = Delta_theta * 2 * (r**3)
         
-        # sum over 8 corners
-        s_local = 0.0
-        for i in (0,1):
-            xi = (x1 if i==0 else x2) - float(e0)
-            for j in (0,1):
-                yj = (y1 if j==0 else y2) - float(n0)
-                for k in (0,1):
-                    zk = (z1 if k==0 else z2) - float(z0)
-                    sign = (-1)**(i+j+k)
-                    s_local += sign * corner_term(xi, yj, zk)
-        # optionally multiply by cell area? usually NOT needed with analytic prism expression.
-        if multiply_by_cell_area:
-            s_local *= (cell*cell)
-        gz_sum += s_local
+        numerator_sum += sign_l * numerator
+        denominator_sum += denominator
     
-    gz_si = G_SI * float(density) * gz_sum  # in m/s^2
-    gz_mgal = gz_si * 1e5
+    if denominator_sum == 0:
+        return z_avg
     
-    if debug:
-        diag = {
-            "n_points_selected": int(len(dem_sel)),
-            "n_grouped": int(len(grouped)),
-            "cell_m": cell,
-            "z_ref": z_ref_use,
-            "gz_sum_raw": gz_sum,
-            "gz_si": gz_si,
-            "gz_mgal": gz_mgal
-        }
-        return float(gz_mgal), diag
+    # Calculate z'²
+    factor = (R2 * R1) / (R2 - R1)
+    z_prime_sq = z_avg**2 + factor * (numerator_sum / denominator_sum)
     
-    return float(gz_mgal)
+    # Ensure non-negative
+    z_prime_sq = max(z_prime_sq, 0.0)
+    
+    return np.sqrt(z_prime_sq)
 
+class OSSTerrainCorrector:
+    """
+    Implementasi lengkap Optimally Selecting Sectors (OSS) algorithm
+    sesuai dengan paper: DOI 10.1007/s11200-019-0273-0
+    """
+    
+    def __init__(self, dem_df, station_coords, params=None):
+        """
+        Initialize OSS corrector.
+        
+        Parameters:
+        -----------
+        dem_df : pandas.DataFrame
+            DEM data with columns ['Easting', 'Northing', 'Elev']
+        station_coords : tuple
+            (easting, northing, elevation) of gravity station
+        params : dict
+            Algorithm parameters (see set_parameters())
+        """
+        self.dem_df = dem_df.copy()
+        self.e0, self.n0, self.z0 = station_coords
+        
+        # Default parameters from paper
+        self.params = {
+            'max_radius': 4500.0,        # meters (4.5 km as in paper)
+            'tolerance_nGal': 1.0,       # 1 nGal tolerance
+            'threshold_mGal': 1.0,       # 1 mGal subdivision threshold
+            'theta_step': 1.0,           # degree
+            'r_step_near': 10.0,         # meters for near zone
+            'r_step_far': 50.0,          # meters for far zone
+            'min_points_per_sector': 10,
+            'use_optimized_elevation': True,
+            'debug': False
+        }
+        
+        if params:
+            self.params.update(params)
+        
+        # Convert DEM to polar coordinates relative to station
+        self._prepare_polar_coords()
+        
+    def _prepare_polar_coords(self):
+        """Convert DEM to polar coordinates relative to station."""
+        dx = self.dem_df['Easting'] - self.e0
+        dy = self.dem_df['Northing'] - self.n0
+        
+        self.r = np.sqrt(dx**2 + dy**2)
+        self.theta_rad = np.arctan2(dy, dx)
+        self.theta_deg = np.degrees(self.theta_rad) % 360.0
+        self.z_rel = self.dem_df['Elev'] - self.z0
+        
+        # Filter by max radius
+        mask = self.r <= self.params['max_radius']
+        self.r_filtered = self.r[mask].values
+        self.theta_filtered = self.theta_deg[mask].values
+        self.z_rel_filtered = self.z_rel[mask].values
+        
+    def _find_turning_points_theta(self, theta1, theta2, R1, R2):
+        """
+        Find turning points in angular direction (first approach).
+        Returns list of angles where significant changes occur.
+        """
+        theta_step = self.params['theta_step']
+        tolerance = self.params['tolerance_nGal'] * NANO_TO_MGAL
+        
+        angles = []
+        terrain_values = []
+        
+        # Sample terrain effect at different θ_m
+        theta_current = theta1
+        while theta_current <= theta2:
+            # Calculate terrain for two sub-sectors
+            mask_left = (self.theta_filtered >= theta1) & (self.theta_filtered < theta_current)
+            mask_right = (self.theta_filtered >= theta_current) & (self.theta_filtered <= theta2)
+            
+            mask_left_full = mask_left & (self.r_filtered >= R1) & (self.r_filtered <= R2)
+            mask_right_full = mask_right & (self.r_filtered >= R1) & (self.r_filtered <= R2)
+            
+            terrain_left = 0.0
+            if np.any(mask_left_full):
+                z_avg_left = np.mean(self.z_rel_filtered[mask_left_full])
+                terrain_left = terrain_effect_cylindrical_sector(
+                    R1, R2, theta1, theta_current, z_avg_left
+                )
+            
+            terrain_right = 0.0
+            if np.any(mask_right_full):
+                z_avg_right = np.mean(self.z_rel_filtered[mask_right_full])
+                terrain_right = terrain_effect_cylindrical_sector(
+                    R1, R2, theta_current, theta2, z_avg_right
+                )
+            
+            total_terrain = terrain_left + terrain_right
+            
+            angles.append(theta_current)
+            terrain_values.append(total_terrain)
+            
+            theta_current += theta_step
+        
+        # Detect turning points (significant changes in slope)
+        turning_points = []
+        if len(terrain_values) > 2:
+            # Calculate second differences
+            for i in range(1, len(terrain_values)-1):
+                diff1 = terrain_values[i] - terrain_values[i-1]
+                diff2 = terrain_values[i+1] - terrain_values[i]
+                
+                # Check for significant change in slope
+                if abs(diff2 - diff1) > tolerance:
+                    turning_points.append(angles[i])
+        
+        return turning_points
+    
+    def _find_turning_points_radius(self, theta1, theta2, R1, R2):
+        """
+        Find turning points in radial direction (second approach).
+        Returns list of radii where significant changes occur.
+        """
+        # Adaptive step size: smaller near station, larger far away
+        r_step = self.params['r_step_near'] if R2 < 1000 else self.params['r_step_far']
+        tolerance = self.params['tolerance_nGal'] * NANO_TO_MGAL
+        
+        radii = []
+        terrain_values = []
+        
+        R_current = R1
+        while R_current <= R2:
+            # Calculate terrain for two annular sub-sectors
+            mask_inner = (self.r_filtered >= R1) & (self.r_filtered < R_current)
+            mask_outer = (self.r_filtered >= R_current) & (self.r_filtered <= R2)
+            
+            mask_inner_full = mask_inner & (self.theta_filtered >= theta1) & (self.theta_filtered <= theta2)
+            mask_outer_full = mask_outer & (self.theta_filtered >= theta1) & (self.theta_filtered <= theta2)
+            
+            terrain_inner = 0.0
+            if np.any(mask_inner_full):
+                z_avg_inner = np.mean(self.z_rel_filtered[mask_inner_full])
+                terrain_inner = terrain_effect_cylindrical_sector(
+                    R1, R_current, theta1, theta2, z_avg_inner
+                )
+            
+            terrain_outer = 0.0
+            if np.any(mask_outer_full):
+                z_avg_outer = np.mean(self.z_rel_filtered[mask_outer_full])
+                terrain_outer = terrain_effect_cylindrical_sector(
+                    R_current, R2, theta1, theta2, z_avg_outer
+                )
+            
+            total_terrain = terrain_inner + terrain_outer
+            
+            radii.append(R_current)
+            terrain_values.append(total_terrain)
+            
+            R_current += r_step
+        
+        # Detect turning points
+        turning_points = []
+        if len(terrain_values) > 2:
+            for i in range(1, len(terrain_values)-1):
+                diff1 = terrain_values[i] - terrain_values[i-1]
+                diff2 = terrain_values[i+1] - terrain_values[i]
+                
+                if abs(diff2 - diff1) > tolerance:
+                    turning_points.append(radii[i])
+        
+        return turning_points
+    
+    def _process_sector(self, theta1, theta2, R1, R2, depth=0):
+        """
+        Recursive sector processing as per Fig. 4 flowchart.
+        
+        Returns:
+        --------
+        total_terrain : float
+            Terrain effect for this sector
+        subsectors : list
+            List of final subsectors with their properties
+        """
+        threshold = self.params['threshold_mGal']
+        
+        # Get data in current sector
+        mask = (self.theta_filtered >= theta1) & (self.theta_filtered <= theta2) & \
+               (self.r_filtered >= R1) & (self.r_filtered <= R2)
+        
+        if not np.any(mask):
+            return 0.0, []
+        
+        z_sector = self.z_rel_filtered[mask]
+        r_sector = self.r_filtered[mask]
+        
+        if len(z_sector) < self.params['min_points_per_sector']:
+            # Too few points, use average elevation
+            z_avg = np.mean(z_sector) if len(z_sector) > 0 else 0.0
+            terrain = terrain_effect_cylindrical_sector(R1, R2, theta1, theta2, z_avg)
+            return terrain, [(theta1, theta2, R1, R2, z_avg, terrain)]
+        
+        # Calculate terrain with average elevation
+        z_avg = np.mean(z_sector)
+        terrain_avg = terrain_effect_cylindrical_sector(R1, R2, theta1, theta2, z_avg)
+        
+        # Check if sector needs subdivision
+        if abs(terrain_avg) < threshold:
+            # Small effect, no subdivision needed
+            if self.params['use_optimized_elevation']:
+                # Calculate optimized elevation
+                Delta_theta = np.radians(theta2 - theta1)
+                deviations = z_sector - z_avg
+                z_opt = optimized_elevation(z_avg, deviations, R1, R2, Delta_theta, r_sector)
+                terrain_final = terrain_effect_cylindrical_sector(R1, R2, theta1, theta2, z_opt)
+            else:
+                terrain_final = terrain_avg
+                z_opt = z_avg
+            
+            return terrain_final, [(theta1, theta2, R1, R2, z_opt, terrain_final)]
+        
+        # Sector needs subdivision - try angular division first
+        turning_points_theta = self._find_turning_points_theta(theta1, theta2, R1, R2)
+        
+        if turning_points_theta:
+            # Divide by angles
+            total_terrain = 0.0
+            all_subsectors = []
+            
+            angles = [theta1] + sorted(turning_points_theta) + [theta2]
+            for i in range(len(angles)-1):
+                sub_theta1, sub_theta2 = angles[i], angles[i+1]
+                
+                # Check if angular subsector needs radial division
+                sub_mask = (self.theta_filtered >= sub_theta1) & (self.theta_filtered <= sub_theta2) & \
+                          (self.r_filtered >= R1) & (self.r_filtered <= R2)
+                
+                if np.any(sub_mask):
+                    z_sub = self.z_rel_filtered[sub_mask]
+                    z_avg_sub = np.mean(z_sub)
+                    terrain_sub = terrain_effect_cylindrical_sector(R1, R2, sub_theta1, sub_theta2, z_avg_sub)
+                    
+                    if abs(terrain_sub) >= threshold:
+                        # Needs radial division
+                        turning_points_r = self._find_turning_points_radius(sub_theta1, sub_theta2, R1, R2)
+                        
+                        if turning_points_r:
+                            # Divide radially
+                            radii = [R1] + sorted(turning_points_r) + [R2]
+                            for j in range(len(radii)-1):
+                                sub_R1, sub_R2 = radii[j], radii[j+1]
+                                sub_terrain, sub_subsectors = self._process_sector(
+                                    sub_theta1, sub_theta2, sub_R1, sub_R2, depth+1
+                                )
+                                total_terrain += sub_terrain
+                                all_subsectors.extend(sub_subsectors)
+                        else:
+                            # No radial division needed
+                            if self.params['use_optimized_elevation']:
+                                r_sub = self.r_filtered[sub_mask]
+                                Delta_theta = np.radians(sub_theta2 - sub_theta1)
+                                deviations = z_sub - z_avg_sub
+                                z_opt = optimized_elevation(z_avg_sub, deviations, R1, R2, Delta_theta, r_sub)
+                                terrain_final = terrain_effect_cylindrical_sector(
+                                    R1, R2, sub_theta1, sub_theta2, z_opt
+                                )
+                            else:
+                                terrain_final = terrain_sub
+                                z_opt = z_avg_sub
+                            
+                            total_terrain += terrain_final
+                            all_subsectors.append((sub_theta1, sub_theta2, R1, R2, z_opt, terrain_final))
+                    else:
+                        # Angular subsector is small enough
+                        if self.params['use_optimized_elevation']:
+                            r_sub = self.r_filtered[sub_mask]
+                            Delta_theta = np.radians(sub_theta2 - sub_theta1)
+                            deviations = z_sub - z_avg_sub
+                            z_opt = optimized_elevation(z_avg_sub, deviations, R1, R2, Delta_theta, r_sub)
+                            terrain_final = terrain_effect_cylindrical_sector(
+                                R1, R2, sub_theta1, sub_theta2, z_opt
+                            )
+                        else:
+                            terrain_final = terrain_sub
+                            z_opt = z_avg_sub
+                        
+                        total_terrain += terrain_final
+                        all_subsectors.append((sub_theta1, sub_theta2, R1, R2, z_opt, terrain_final))
+            
+            return total_terrain, all_subsectors
+        
+        else:
+            # No angular turning points, try radial division
+            turning_points_r = self._find_turning_points_radius(theta1, theta2, R1, R2)
+            
+            if turning_points_r:
+                total_terrain = 0.0
+                all_subsectors = []
+                
+                radii = [R1] + sorted(turning_points_r) + [R2]
+                for i in range(len(radii)-1):
+                    sub_R1, sub_R2 = radii[i], radii[i+1]
+                    sub_terrain, sub_subsectors = self._process_sector(
+                        theta1, theta2, sub_R1, sub_R2, depth+1
+                    )
+                    total_terrain += sub_terrain
+                    all_subsectors.extend(sub_subsectors)
+                
+                return total_terrain, all_subsectors
+            else:
+                # No subdivision possible, use optimized elevation
+                if self.params['use_optimized_elevation']:
+                    Delta_theta = np.radians(theta2 - theta1)
+                    deviations = z_sector - z_avg
+                    z_opt = optimized_elevation(z_avg, deviations, R1, R2, Delta_theta, r_sector)
+                    terrain_final = terrain_effect_cylindrical_sector(R1, R2, theta1, theta2, z_opt)
+                else:
+                    terrain_final = terrain_avg
+                    z_opt = z_avg
+                
+                return terrain_final, [(theta1, theta2, R1, R2, z_opt, terrain_final)]
+    
+    def calculate_terrain_correction(self):
+        """
+        Main method to calculate terrain correction using OSS algorithm.
+        
+        Returns:
+        --------
+        total_tc : float
+            Total terrain correction in mGal
+        subsectors : list
+            List of all optimally selected subsectors
+        """
+        if self.params['debug']:
+            print(f"Starting OSS calculation for station at ({self.e0:.1f}, {self.n0:.1f})")
+            print(f"DEM points in radius: {len(self.r_filtered)}")
+        
+        # Start with full circle and maximum radius
+        total_tc, subsectors = self._process_sector(
+            theta1=0.0,
+            theta2=360.0,
+            R1=0.0,
+            R2=self.params['max_radius']
+        )
+        
+        if self.params['debug']:
+            print(f"Total TC: {total_tc:.6f} mGal")
+            print(f"Number of subsectors: {len(subsectors)}")
+            
+            # Print largest subsectors
+            subsectors_sorted = sorted(subsectors, key=lambda x: abs(x[5]), reverse=True)[:5]
+            print("\nTop 5 subsectors:")
+            for i, (t1, t2, r1, r2, z, tc) in enumerate(subsectors_sorted):
+                print(f"  {i+1}: θ={t1:.1f}-{t2:.1f}°, r={r1:.0f}-{r2:.0f}m, z={z:.1f}m, Δg={tc:.6f}mGal")
+        
+        return total_tc, subsectors
+    
+    def visualize_sectors(self, subsectors, max_sectors=50):
+        """
+        Visualize the optimally selected sectors (polar plot).
+        
+        Parameters:
+        -----------
+        subsectors : list
+            Output from calculate_terrain_correction()
+        max_sectors : int
+            Maximum number of sectors to plot (for clarity)
+        """
+        if not subsectors:
+            print("No subsectors to visualize")
+            return
+        
+        fig, ax = plt.subplots(figsize=(10, 8), subplot_kw=dict(projection='polar'))
+        
+        # Plot only the largest sectors if there are too many
+        if len(subsectors) > max_sectors:
+            subsectors_to_plot = sorted(subsectors, key=lambda x: abs(x[5]), reverse=True)[:max_sectors]
+        else:
+            subsectors_to_plot = subsectors
+        
+        # Color by terrain effect magnitude
+        tc_values = [s[5] for s in subsectors_to_plot]
+        abs_tc = np.abs(tc_values)
+        norm = plt.Normalize(min(abs_tc), max(abs_tc))
+        cmap = plt.cm.viridis
+        
+        for i, (theta1, theta2, r1, r2, z, tc) in enumerate(subsectors_to_plot):
+            # Convert to radians
+            theta1_rad = np.radians(theta1)
+            theta2_rad = np.radians(theta2)
+            
+            # Create polygon for sector
+            theta_poly = [theta1_rad, theta1_rad, theta2_rad, theta2_rad]
+            r_poly = [r1, r2, r2, r1]
+            
+            # Plot sector
+            color = cmap(norm(abs(tc)))
+            ax.fill(theta_poly, r_poly, alpha=0.6, color=color, edgecolor='black', linewidth=0.5)
+        
+        ax.set_title(f"OSS Selected Sectors\nStation: ({self.e0:.0f}, {self.n0:.0f})", pad=20)
+        ax.set_xlabel("Radius (m)")
+        ax.grid(True)
+        
+        # Add colorbar
+        sm = plt.cm.ScalarMappable(cmap=cmap, norm=norm)
+        sm.set_array([])
+        cbar = fig.colorbar(sm, ax=ax, pad=0.1)
+        cbar.set_label('|Terrain Effect| (mGal)')
+        
+        plt.tight_layout()
+        return fig
+
+# ============================================================
+# FUNGSI INTEGRASI DENGAN STREAMLIT
+# ============================================================
+def calculate_oss_correction(dem_df, station_row, params=None):
+    """
+    Wrapper function for Streamlit integration.
+    
+    Parameters:
+    -----------
+    dem_df : pandas.DataFrame
+        DEM data
+    station_row : pandas.Series
+        Row containing station data (must have Easting, Northing, Elev)
+    params : dict
+        OSS algorithm parameters
+    
+    Returns:
+    --------
+    tc_value : float
+        Terrain correction value in mGal
+    """
+    station_coords = (
+        float(station_row['Easting']),
+        float(station_row['Northing']),
+        float(station_row['Elev'])
+    )
+    
+    corrector = OSSTerrainCorrector(dem_df, station_coords, params)
+    tc_value, _ = corrector.calculate_terrain_correction()
+    
+    return tc_value
 # -----------------------
 # DEM loader robust
 # -----------------------
@@ -533,31 +929,74 @@ if run:
         # -----------------------------------------
         # TERRAIN CORRECTION — INSIDE SHEET LOOP
         # -----------------------------------------
-        tc_list = []  # PENTING: reset di sini
+        # GANTI BLOK INI (sekitar baris 395-415):
+        # tc_list = []
+        # nstations = len(df)
+        # for i in range(nstations):
+        #     e0 = float(df.iloc[i]["Easting"])
+        #     n0 = float(df.iloc[i]["Northing"])
+        #     z0 = float(df.iloc[i]["Elev"])
+        #     
+        #     if method.startswith("NAGY"):
+        #         tc_val, diag = compute_nagy_tc_debug(...)
+        #     else:
+        #         tc_val = hammer_tc(e0, n0, z0, dem)
+        #     
+        #     tc_list.append(tc_val)
+        
+        # DENGAN INI:
+        tc_list = []
         nstations = len(df)
         
+        # Parameter OSS (sesuai paper)
+        oss_params = {
+            'max_radius': max_radius,  # dari sidebar
+            'tolerance_nGal': 1.0,     # 1 nGal seperti di paper
+            'threshold_mGal': 1.0,     # 1 mGal threshold
+            'theta_step': 1.0,         # 1 derajat
+            'r_step_near': 10.0,       # 10 m untuk zona dekat
+            'r_step_far': 50.0,        # 50 m untuk zona jauh
+            'use_optimized_elevation': True,
+            'debug': False  # Set True untuk output debugging
+        }
+        
+        progress_bar = st.progress(0)
+        status_text = st.empty()
+        
         for i in range(nstations):
-            e0 = float(df.iloc[i]["Easting"])
-            n0 = float(df.iloc[i]["Northing"])
-            z0 = float(df.iloc[i]["Elev"])
+            station_data = df.iloc[i]
             
-            if method.startswith("NAGY"):
-                tc_val, diag = compute_nagy_tc_debug(
-                    e0, n0, z0,
-                    dem_df=dem,
-                    density=density,
-                    max_radius=float(max_radius),
-                    cell_size=None,
-                    z_ref=float(z_ref),
-                    debug=False
-                )
-            else:
-                tc_val = hammer_tc(e0, n0, z0, dem)
+            # Update progress
+            progress = (i + 1) / nstations
+            progress_bar.progress(progress)
+            status_text.text(f"Processing station {i+1}/{nstations}...")
             
-            tc_list.append(tc_val)  # 100% aman karena jumlahnya sama
+            if method == "OSS (Algorithm from Paper)":
+                if dem is not None:
+                    tc_val = calculate_oss_correction(dem, station_data, oss_params)
+                else:
+                    st.error("DEM diperlukan untuk metode OSS.")
+                    tc_val = 0.0
+            elif method == "HAMMER (Legacy)":
+                e0 = float(station_data["Easting"])
+                n0 = float(station_data["Northing"])
+                z0 = float(station_data["Elev"])
+                tc_val = hammer_tc(e0, n0, z0, dem) if dem is not None else 0.0
+            else:  # "NAGY Prism (Reference)"
+                e0 = float(station_data["Easting"])
+                n0 = float(station_data["Northing"])
+                z0 = float(station_data["Elev"])
+                if dem is not None:
+                    tc_val, _ = compute_nagy_tc_debug(e0, n0, z0, dem, density, max_radius, debug=False)
+                else:
+                    tc_val = 0.0
+            
+            tc_list.append(tc_val)
+        
+        progress_bar.empty()
+        status_text.empty()
         
         df["Koreksi Medan"] = tc_list
-        
         df["X-Parasnis"] = 0.04192 * df["Elev"] - df["Koreksi Medan"]
         df["Y-Parasnis"] = df["Free Air Correction"]
         df["Hari"] = sh
@@ -643,3 +1082,4 @@ if run:
     # download
     st.download_button("Download CSV", df_all.to_csv(index=False).encode("utf-8"),
                       "Hasil Perhitungan.csv")
+
