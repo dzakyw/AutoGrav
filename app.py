@@ -808,7 +808,7 @@ with st.sidebar.expander("⚙️ OSS Algorithm Parameters", expanded=debug_mode)
         help="Sector dengan points < ini tidak di-subdivide"
     )
 
-method_options = ["OSS (Algorithm from Paper)", "HAMMER (Legacy)", "NAGY Prism (Reference)"]
+method_options = ["Optimally Selecting Sectors (OSS) algorithm", "HAMMER (Legacy)", "NAGY Prism (Reference)"]
 method = st.sidebar.selectbox("Metode Pengukuran Terrain", method_options)
 density = st.sidebar.number_input("Densitas Koreksi Medan (kg/m³)", value=2670.0, step=10.0, format="%.1f")
 max_radius = st.sidebar.number_input("Jarak Maksimum (m) untuk Nagy", value=10000, step=1000)
@@ -1108,5 +1108,6 @@ if run:
     # download
     st.download_button("Download CSV", df_all.to_csv(index=False).encode("utf-8"),
                       "Hasil Perhitungan.csv")
+
 
 
