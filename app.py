@@ -814,7 +814,6 @@ density = st.sidebar.number_input("Densitas Koreksi Medan (kg/m³)", value=2670.
 max_radius = st.sidebar.number_input("Jarak Maksimum (m) untuk Nagy", value=10000, step=1000)
 z_ref = st.sidebar.number_input("z_ref (bottom prism reference, m)", value=0.0)
 run = st.sidebar.button("Run")
-st.sidebar.write("Notes: densitas biasanya 2670 kg/m³; adjust naik jarak radius untuk mendapatkan pengukuran medan yang jauh (biasanya 5-10 km)")
 
 st.sidebar.subheader("Contoh File Input")
 st.sidebar.write("[Contoh Data Input Gravity](https://github.com/dzakyw/AutoGrav/raw/9bb43e1559c823350f2371360309d84eaab5ea38/sample_gravity.xlsx)")
@@ -1109,4 +1108,5 @@ if run:
     # download
     st.download_button("Download CSV", df_all.to_csv(index=False).encode("utf-8"),
                       "Hasil Perhitungan.csv")
+
 
