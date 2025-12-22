@@ -775,7 +775,7 @@ st.markdown(
 
 st.sidebar.header("Input Files")
 grav = st.sidebar.file_uploader("Input Gravity Multi-Sheets (.xlsx)", type=["xlsx"])
-demf = st.sidebar.file_uploader("Upload DEM (CSV/XYZ)", type=["csv","txt","xyz"])
+demf = st.sidebar.file_uploader("Upload DEM (CSV/XYZ/TIFF)", type=["csv","txt","xyz","tif","tiff"])
 kmf = st.sidebar.file_uploader("Koreksi Medan manual (optional jika punya)", type=["csv","xlsx"])
 G_base = st.sidebar.number_input("G Absolute di Base", value=0.0)
 
@@ -808,12 +808,13 @@ with st.sidebar.expander("⚙️ OSS Algorithm Parameters", expanded=debug_mode)
         help="Sector dengan points < ini tidak di-subdivide"
     )
 
-method_options = ["Optimally Selecting Sectors (OSS) algorithm", "HAMMER (Legacy)", "NAGY Prism (Reference)"]
+method_options = ["OSS (Algorithm from Paper)", "HAMMER (Legacy)", "NAGY Prism (Reference)"]
 method = st.sidebar.selectbox("Metode Pengukuran Terrain", method_options)
 density = st.sidebar.number_input("Densitas Koreksi Medan (kg/m³)", value=2670.0, step=10.0, format="%.1f")
 max_radius = st.sidebar.number_input("Jarak Maksimum (m) untuk Nagy", value=10000, step=1000)
 z_ref = st.sidebar.number_input("z_ref (bottom prism reference, m)", value=0.0)
 run = st.sidebar.button("Run")
+st.sidebar.write("Notes: densitas biasanya 2670 kg/m³; adjust naik jarak radius untuk mendapatkan pengukuran medan yang jauh (biasanya 5-10 km)")
 
 st.sidebar.subheader("Contoh File Input")
 st.sidebar.write("[Contoh Data Input Gravity](https://github.com/dzakyw/AutoGrav/raw/9bb43e1559c823350f2371360309d84eaab5ea38/sample_gravity.xlsx)")
@@ -1108,6 +1109,3 @@ if run:
     # download
     st.download_button("Download CSV", df_all.to_csv(index=False).encode("utf-8"),
                       "Hasil Perhitungan.csv")
-
-
-
