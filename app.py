@@ -258,7 +258,54 @@ def hammer_tc(e0, n0, z0, dem_df):
             tc += HAMMER_F[i] * dh
         inner = outer
     return float(tc)
-
+def simple_nagy_prism(e0, n0, z0, dem_df, density, max_radius):
+    """
+    Implementasi sederhana Nagy prism untuk referensi.
+    HANYA untuk perbandingan, bukan implementasi lengkap.
+    """
+    import numpy as np
+    
+    if dem_df is None or len(dem_df) == 0:
+        return 0.0
+    
+    # Pilih titik dalam radius
+    dx = dem_df['Easting'].to_numpy() - e0
+    dy = dem_df['Northing'].to_numpy() - n0
+    r = np.sqrt(dx**2 + dy**2)
+    mask = r <= max_radius
+    
+    if not np.any(mask):
+        return 0.0
+    
+    # Data dalam radius
+    z_diff = dem_df['Elev'].to_numpy()[mask] - z0
+    r_vals = r[mask]
+    
+    # Pendekatan sederhana: g ~ G * ρ * ΔV * z / r^3
+    G = 6.67430e-11
+    # Asumsikan setiap titik mewakili area grid
+    # Coba infer grid spacing dari data
+    unique_x = np.unique(dem_df['Easting'].to_numpy())
+    unique_y = np.unique(dem_df['Northing'].to_numpy())
+    
+    if len(unique_x) > 1 and len(unique_y) > 1:
+        dx_grid = np.median(np.diff(np.sort(unique_x)))
+        dy_grid = np.median(np.diff(np.sort(unique_y)))
+        cell_area = dx_grid * dy_grid
+    else:
+        cell_area = 30 * 30  # Default 30x30 m jika tidak bisa diinfer
+    
+    # Hitung efek prism sederhana
+    volumes = cell_area * np.abs(z_diff)
+    
+    # Avoid division by zero
+    with np.errstate(divide='ignore', invalid='ignore'):
+        g_si = G * density * np.sum(volumes * z_diff / (r_vals**3 + 1e-10))
+    
+    # Convert to mGal
+    g_mgal = g_si * 1e5
+    
+    return float(g_mgal)
 # -----------------------
 # Nagy prism — improved
 # -----------------------
@@ -846,7 +893,8 @@ grav = st.sidebar.file_uploader("Input Gravity Multi-Sheets (.xlsx)", type=["xls
 demf = st.sidebar.file_uploader("Upload DEM (CSV/XYZ/TIFF)", type=["csv","txt","xyz","tif","tiff"])
 kmf = st.sidebar.file_uploader("Koreksi Medan manual (optional jika punya)", type=["csv","xlsx"])
 G_base = st.sidebar.number_input("G Absolute di Base", value=0.0)
-method = st.sidebar.selectbox("Metode Pengukuran Terrain", ["NAGY (prism)","HAMMER"])
+method_options = ["OSS (Algorithm from Paper)", "HAMMER (Legacy)", "NAGY Prism (Reference)"]
+method = st.sidebar.selectbox("Metode Pengukuran Terrain", method_options)
 density = st.sidebar.number_input("Densitas Koreksi Medan (kg/m³)", value=2670.0, step=10.0, format="%.1f")
 max_radius = st.sidebar.number_input("Jarak Maksimum (m) untuk Nagy", value=10000, step=1000)
 z_ref = st.sidebar.number_input("z_ref (bottom prism reference, m)", value=0.0)
@@ -982,15 +1030,15 @@ if run:
                 n0 = float(station_data["Northing"])
                 z0 = float(station_data["Elev"])
                 tc_val = hammer_tc(e0, n0, z0, dem) if dem is not None else 0.0
-            else:  # "NAGY Prism (Reference)"
+            elif method == "NAGY Prism (Reference)":
                 e0 = float(station_data["Easting"])
                 n0 = float(station_data["Northing"])
                 z0 = float(station_data["Elev"])
                 if dem is not None:
-                    tc_val, _ = compute_nagy_tc_debug(e0, n0, z0, dem, density, max_radius, debug=False)
+                    # Gunakan implementasi sederhana Nagy prism
+                    tc_val = simple_nagy_prism(e0, n0, z0, dem, density, max_radius)
                 else:
                     tc_val = 0.0
-            
             tc_list.append(tc_val)
         
         progress_bar.empty()
@@ -1082,4 +1130,5 @@ if run:
     # download
     st.download_button("Download CSV", df_all.to_csv(index=False).encode("utf-8"),
                       "Hasil Perhitungan.csv")
+
 
