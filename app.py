@@ -39,8 +39,8 @@ def hash_password(password: str):
 # 2. USER DATABASE (EDIT SESUAI KEBUTUHAN)
 # ---------------------------------------------
 USER_DB = {
-    "admin": hash_password("admin"),  # ubah sesuai kebutuhan
-    "user": hash_password("12345"),   # ubah sesuai kebutuhan
+    "admin": hash_password("admin"),
+    "user": hash_password("12345"),
 }
 
 # ROLE OPSIONAL
@@ -74,7 +74,7 @@ def login_page():
             st.rerun()
         else:
             st.error("Invalid username or password")
-    st.stop()  # hanya menampilkan login page
+    st.stop()
 
 # ---------------------------------------------
 # 5. LOGOUT BUTTON
@@ -90,7 +90,6 @@ def logout_button():
 def require_login():
     if "logged_in" not in st.session_state or not st.session_state.logged_in:
         login_page()
-    # Jika sudah login, tampilkan status & tombol logout
     st.sidebar.success(f"Logged in as: {st.session_state.username}")
     logout_button()
 
@@ -141,9 +140,6 @@ def latlon_to_utm_redfearn(lat, lon):
 def load_geotiff_without_tfw(file):
     """
     Load GeoTIFF using only TIFF metadata (GeoKeys).
-    Works if TIFF contains:
-    - ModelPixelScaleTag (33550)
-    - ModelTiepointTag (33922)
     """
     img = Image.open(file)
     arr = np.array(img, dtype=float)
@@ -152,15 +148,12 @@ def load_geotiff_without_tfw(file):
     if 33550 not in meta or 33922 not in meta:
         raise ValueError("GeoTIFF metadata not found. TIFF requires TFW or manual bounding box.")
     
-    # Metadata
-    scaleX, scaleY, _ = meta[33550]  # pixel size
-    tiepoint = meta[33922]           # tiepoint structure
-    # According to GeoTIFF specs:
-    X0 = tiepoint[3]  # model_space_X of UL corner
-    Y0 = tiepoint[4]  # model_space_Y of UL corner
+    scaleX, scaleY, _ = meta[33550]
+    tiepoint = meta[33922]
+    X0 = tiepoint[3]
+    Y0 = tiepoint[4]
     
     rows, cols = arr.shape
-    # Build coordinate grid
     X = X0 + np.arange(cols) * scaleX
     Y = Y0 - np.arange(rows) * abs(scaleY)
     XX, YY = np.meshgrid(X, Y)
@@ -201,12 +194,28 @@ def load_dem(file):
     raise ValueError("DEM format unsupported. Use: CSV, XYZ, TXT, TIFF")
 
 # -----------------------
-# Drift solver
+# Drift solver - DIPERBAIKI dengan validasi duplikat
 # -----------------------
 def compute_drift(df, G_base):
     df = df.copy()
     df["Time"] = pd.to_datetime(df["Time"], format="%H:%M:%S", errors="raise")
     df["G_read (mGal)"] = pd.to_numeric(df["G_read (mGal)"], errors="coerce")
+    
+    # VALIDASI: Cek duplikat nama dengan koordinat berbeda
+    duplicate_check = df.groupby('Nama').agg({
+        'Lat': 'nunique',
+        'Lon': 'nunique',
+        'Elev': 'nunique'
+    })
+    
+    problematic_stations = duplicate_check[
+        (duplicate_check['Lat'] > 1) | 
+        (duplicate_check['Lon'] > 1) | 
+        (duplicate_check['Elev'] > 1)
+    ]
+    
+    if not problematic_stations.empty and st.session_state.get('debug_mode', False):
+        st.warning(f"⚠️ Found stations with same name but different coordinates: {problematic_stations.index.tolist()}")
     
     names = df["Nama"].astype(str).tolist()
     unique_st = list(dict.fromkeys(names))
@@ -269,16 +278,13 @@ def terrain_effect_cylindrical_sector(R1, R2, theta1, theta2, z, density):
     """
     PERSAMAAN (1) dari paper: Δg_T = GρΔθ[R2-R1+√(R1²+z²)-√(R2²+z²)]
     """
-    # Convert angles to radians
     theta1_rad = np.radians(theta1)
     theta2_rad = np.radians(theta2)
     Delta_theta = theta2_rad - theta1_rad
     
-    # Calculate terrain effect in SI units (m/s²)
     term = (R2 - R1) + np.sqrt(R1**2 + z**2) - np.sqrt(R2**2 + z**2)
     delta_g_si = G * density * Delta_theta * term
     
-    # Convert to mGal (1 mGal = 10^-5 m/s²)
     return delta_g_si * 1e5
 
 def optimized_elevation(z_avg, deviations, R1, R2, Delta_theta, r_points):
@@ -288,11 +294,9 @@ def optimized_elevation(z_avg, deviations, R1, R2, Delta_theta, r_points):
     if len(deviations) == 0:
         return z_avg
     
-    # Avoid division by zero
     if R2 == R1 or Delta_theta == 0:
         return z_avg
     
-    # Calculate weighted sum according to Eq. (8)
     numerator_sum = 0.0
     denominator_sum = 0.0
     
@@ -310,325 +314,41 @@ def optimized_elevation(z_avg, deviations, R1, R2, Delta_theta, r_points):
     if denominator_sum == 0:
         return z_avg
     
-    # Calculate z'²
     factor = (R2 * R1) / (R2 - R1)
     z_prime_sq = z_avg**2 + factor * (numerator_sum / denominator_sum)
     
-    # Ensure non-negative
     z_prime_sq = max(z_prime_sq, 0.0)
     
     return np.sqrt(z_prime_sq)
 
 # ============================================================
-# FUNGSI VALIDASI
-# ============================================================
-def validate_tc_value(tc_value, station_name, debug=False):
-    """Validasi nilai TC yang reasonable"""
-    validated_tc = tc_value
-    
-    # Rule 1: TC tidak mungkin negatif besar
-    if tc_value < -0.5:
-        if debug:
-            st.warning(f"Station {station_name}: TC sangat negatif ({tc_value:.3f} mGal)")
-        validated_tc = max(tc_value, 0.0)
-    
-    # Rule 2: TC biasanya antara 0-50 mGal untuk topografi normal
-    elif tc_value > 50.0:
-        if debug:
-            st.warning(f"Station {station_name}: TC sangat besar ({tc_value:.1f} mGal)")
-        validated_tc = min(tc_value, 100.0)
-    
-    # Rule 3: TC < 0.01 mGal mungkin error
-    elif 0 <= tc_value < 0.01:
-        if debug:
-            st.warning(f"Station {station_name}: TC sangat kecil ({tc_value:.6f} mGal)")
-    
-    return validated_tc
-
-def plot_dem_elevation(dem_df, stations_df=None):
-    """
-    Plot elevation dari DEM dengan overlay stasiun
-    """
-    # Interpolasi DEM untuk plotting smooth
-    x_dem = dem_df["Easting"]
-    y_dem = dem_df["Northing"]
-    z_dem = dem_df["Elev"]
-    
-    # Buat grid untuk contour
-    xi = np.linspace(x_dem.min(), x_dem.max(), 200)
-    yi = np.linspace(y_dem.min(), y_dem.max(), 200)
-    XI, YI = np.meshgrid(xi, yi)
-    
-    # Interpolasi
-    ZI = griddata((x_dem, y_dem), z_dem, (XI, YI), method='cubic')
-    
-    # Plot
-    fig, ax = plt.subplots(figsize=(10, 8))
-    
-    # Contour plot dari DEM
-    contour = ax.contourf(XI, YI, ZI, 40, cmap='terrain', alpha=0.8)
-    
-    # Overlay stasiun jika ada
-    if stations_df is not None:
-        ax.scatter(stations_df['Easting'], stations_df['Northing'], 
-                  c='red', s=50, marker='^', edgecolor='black',
-                  label='Gravity Stations', zorder=5)
-    
-    ax.set_xlabel('Easting (m)')
-    ax.set_ylabel('Northing (m)')
-    ax.set_title('Topography from DEM with Gravity Stations')
-    
-    # Colorbar
-    cbar = fig.colorbar(contour, ax=ax)
-    cbar.set_label('Elevation (m)')
-    
-    if stations_df is not None:
-        ax.legend()
-    
-    ax.grid(True, alpha=0.3)
-    plt.tight_layout()
-    
-    return fig
-
-# ============================================================
-# HELPER FUNCTION UNTUK PLOTTING CONTOUR
-# ============================================================
-def plot_cont(x, y, z, title):
-    """
-    Plot contour dari data
-    Parameters:
-    x, y: koordinat
-    z: nilai untuk contour
-    title: judul plot
-    """
-    # Buat grid untuk contour
-    gx = np.linspace(x.min(), x.max(), 200)
-    gy = np.linspace(y.min(), y.max(), 200)
-    GX, GY = np.meshgrid(gx, gy)
-    
-    # Interpolasi
-    Z = griddata((x, y), z, (GX, GY), method="cubic")
-    
-    # Plot
-    fig, ax = plt.subplots(figsize=(8, 6))
-    cf = ax.contourf(GX, GY, Z, 40, cmap="jet")
-    ax.scatter(x, y, c=z, cmap="jet", s=12, edgecolor="k")
-    ax.set_xlabel('Easting (m)')
-    ax.set_ylabel('Northing (m)')
-    ax.set_title(title)
-    fig.colorbar(cf, ax=ax, label='Value (mGal)')
-    
-    return fig
-
-# ============================================================
-# FUNGSI PLOTTING INTERAKTIF DENGAN PLOTLY
-# ============================================================
-def create_interactive_scatter(df, x_col, y_col, color_col, title, hover_cols=None):
-    """
-    Buat scatter plot interaktif dengan Plotly
-    """
-    if not PLOTLY_AVAILABLE:
-        return None
-    
-    if hover_cols is None:
-        hover_cols = ['Nama', 'Elev', 'Lon', 'Lat']
-    
-    # Pastikan kolom yang diperlukan ada
-    hover_data = {col: df[col] for col in hover_cols if col in df.columns}
-    
-    # Buat figure dengan Plotly
-    fig = px.scatter(
-        df,
-        x=x_col,
-        y=y_col,
-        color=color_col,
-        hover_data=hover_data,
-        title=title,
-        color_continuous_scale='viridis',
-        size_max=15
-    )
-    
-    # Update layout untuk lebih baik
-    fig.update_layout(
-        title=dict(text=title, font=dict(size=16)),
-        xaxis_title=x_col,
-        yaxis_title=y_col,
-        hovermode='closest',
-        showlegend=True
-    )
-    
-    # Tambahkan tooltips yang lebih informatif
-    fig.update_traces(
-        hovertemplate='<b>%{customdata[0]}</b><br>' +
-                     f'{x_col}: %{{x:.3f}}<br>' +
-                     f'{y_col}: %{{y:.3f}}<br>' +
-                     f'{color_col}: %{{marker.color:.2f}}<br>' +
-                     'Elev: %{customdata[1]:.1f} m<br>' +
-                     'Lon: %{customdata[2]:.4f}°<br>' +
-                     'Lat: %{customdata[3]:.4f}°<extra></extra>'
-    )
-    
-    return fig
-
-def create_contour_interactive(df, x_col, y_col, z_col, title):
-    """
-    Buat contour plot interaktif dengan Plotly
-    """
-    if not PLOTLY_AVAILABLE:
-        return None
-    
-    # Buat grid untuk interpolasi
-    xi = np.linspace(df[x_col].min(), df[x_col].max(), 100)
-    yi = np.linspace(df[y_col].min(), df[y_col].max(), 100)
-    xi_grid, yi_grid = np.meshgrid(xi, yi)
-    
-    # Interpolasi data
-    zi = griddata(
-        (df[x_col], df[y_col]), 
-        df[z_col], 
-        (xi_grid, yi_grid), 
-        method='cubic'
-    )
-    
-    # Buat contour plot
-    fig = go.Figure(data=
-        go.Contour(
-            z=zi,
-            x=xi,
-            y=yi,
-            colorscale='Viridis',
-            contours=dict(
-                coloring='heatmap',
-                showlabels=True,
-                labelfont=dict(size=12, color='white')
-            ),
-            colorbar=dict(
-                title=z_col,
-                titleside='right'
-            )
-        )
-    )
-    
-    # Tambahkan scatter points
-    fig.add_trace(
-        go.Scatter(
-            x=df[x_col],
-            y=df[y_col],
-            mode='markers',
-            marker=dict(
-                size=8,
-                color='red',
-                symbol='circle',
-                line=dict(width=1, color='black')
-            ),
-            name='Stations',
-            text=df['Nama'],
-            hovertemplate='<b>%{text}</b><br>' +
-                         f'{x_col}: %{{x:.3f}}<br>' +
-                         f'{y_col}: %{{y:.3f}}<br>' +
-                         f'{z_col}: %{{customdata:.2f}}<extra></extra>',
-            customdata=df[z_col]
-        )
-    )
-    
-    fig.update_layout(
-        title=dict(text=title, font=dict(size=16)),
-        xaxis_title=x_col,
-        yaxis_title=y_col,
-        showlegend=True
-    )
-    
-    return fig
-
-def create_folium_map(df, center_lat=None, center_lon=None, zoom_start=10):
-    """
-    Buat peta interaktif dengan Folium
-    """
-    if not FOLIUM_AVAILABLE or len(df) == 0:
-        return None
-    
-    # Tentukan center map
-    if center_lat is None:
-        center_lat = df['Lat'].mean()
-    if center_lon is None:
-        center_lon = df['Lon'].mean()
-    
-    # Buat peta
-    m = folium.Map(
-        location=[center_lat, center_lon],
-        zoom_start=zoom_start,
-        tiles='OpenStreetMap',
-        control_scale=True
-    )
-    
-    # Normalisasi nilai untuk color mapping
-    if 'Complete Bouger Anomaly' in df.columns:
-        value_col = 'Complete Bouger Anomaly'
-    elif 'Koreksi Medan' in df.columns:
-        value_col = 'Koreksi Medan'
-    else:
-        value_col = 'Elev'
-    
-    values = df[value_col]
-    norm_values = (values - values.min()) / (values.max() - values.min())
-    
-    # Tambahkan marker untuk setiap stasiun
-    for idx, row in df.iterrows():
-        # Tentukan warna berdasarkan nilai
-        color_int = int(255 * norm_values[idx])
-        color = f'#{color_int:02x}{color_int:02x}255'  # Biru gradient
-        
-        # Popup info
-        popup_text = f"""
-        <div style="font-family: Arial; font-size: 12px;">
-            <b>Station:</b> {row['Nama']}<br>
-            <b>Lat/Lon:</b> {row['Lat']:.4f}°, {row['Lon']:.4f}°<br>
-            <b>Elevation:</b> {row['Elev']:.1f} m<br>
-            <b>Complete Bouguer:</b> {row.get('Complete Bouger Anomaly', 'N/A'):.2f} mGal<br>
-            <b>Terrain Corr:</b> {row.get('Koreksi Medan', 'N/A'):.2f} mGal
-        </div>
-        """
-        
-        folium.CircleMarker(
-            location=[row['Lat'], row['Lon']],
-            radius=8,
-            popup=folium.Popup(popup_text, max_width=300),
-            color=color,
-            fill=True,
-            fill_color=color,
-            fill_opacity=0.7,
-            weight=1
-        ).add_to(m)
-    
-    # Tambahkan layer control
-    folium.LayerControl().add_to(m)
-    
-    return m
-# ============================================================
-# CLASS OSSTerrainCorrector YANG DIPERBAIKI
+# CLASS OSSTerrainCorrector - VERSI DIPERBAIKI
 # ============================================================
 class OSSTerrainCorrector:
     def __init__(self, dem_df, station_coords, params=None):
         self.e0, self.n0, self.z0 = station_coords
         self.dem_df = dem_df.copy()
         
-        # Default parameters
         self.params = {
             'max_radius': 4500.0,
             'tolerance_nGal': 1.0,
-            'threshold_mGal': 0.1,  # DIKURANGI dari 1.0
+            'threshold_mGal': 0.1,
             'theta_step': 1.0,
             'r_step_near': 10.0,
             'r_step_far': 50.0,
             'min_points_per_sector': 10,
             'use_optimized_elevation': True,
-            'debug': False
+            'debug': False,
+            'density': RHO
         }
         
         if params:
             self.params.update(params)
         
-        # FIX KRITIS: Sesuai paper, z = station_height - average_topographic_height
+        # ============================================================
+        # PERBAIKAN KRITIS: Definisi z yang BENAR
+        # z = elevasi_DEM - elevasi_stasiun
+        # ============================================================
         dx = self.dem_df['Easting'] - self.e0
         dy = self.dem_df['Northing'] - self.n0
         
@@ -636,22 +356,32 @@ class OSSTerrainCorrector:
         self.theta_rad = np.arctan2(dy, dx)
         self.theta_deg = np.degrees(self.theta_rad) % 360.0
         
-        # PERBAIKAN: Gunakan station - dem (sesuai paper)
-        self.z_rel = self.z0 - self.dem_df['Elev']  # FIXED!
+        # INI YANG BENAR: z = h_dem - h_station
+        self.z_rel = self.dem_df['Elev'] - self.z0
         
-        # Debug info
         if self.params.get('debug', False):
-            st.write(f"DEBUG: Station elevation = {self.z0:.1f} m")
-            st.write(f"DEBUG: z_rel range = {self.z_rel.min():.1f} to {self.z_rel.max():.1f} m")
+            st.write(f"🚨 DEBUG: Station elevation z0 = {self.z0:.1f} m")
+            st.write(f"🚨 DEBUG: z = h_dem - h_station = {self.z_rel.min():.1f} to {self.z_rel.max():.1f} m")
+            st.write(f"🚨 DEBUG: Mean z = {self.z_rel.mean():.1f} m")
+            st.write(f"🚨 DEBUG: Points with z > 0 (DEM higher): {(self.z_rel > 0).sum()}")
+            st.write(f"🚨 DEBUG: Points with z < 0 (DEM lower): {(self.z_rel < 0).sum()}")
         
-        # Filter by max radius
         mask = self.r <= self.params['max_radius']
         self.r_filtered = self.r[mask].values
         self.theta_filtered = self.theta_deg[mask].values
         self.z_rel_filtered = self.z_rel[mask].values
         
+        if self.params.get('debug', False):
+            st.write(f"🚨 DEBUG: Points within radius: {len(self.r_filtered)}")
+    
+    def _sector_effect(self, R1, R2, theta1, theta2, z_avg):
+        """Wrapper untuk terrain_effect_cylindrical_sector"""
+        return terrain_effect_cylindrical_sector(
+            R1, R2, theta1, theta2, z_avg, self.params['density']
+        )
+    
     def _find_turning_points_theta(self, theta1, theta2, R1, R2):
-        """Find turning points in angular direction"""
+        """Find turning points in angular direction - DIPERBAIKI"""
         theta_step = self.params['theta_step']
         tolerance = self.params['tolerance_nGal'] * NANO_TO_MGAL
         
@@ -660,43 +390,39 @@ class OSSTerrainCorrector:
         
         theta_current = theta1
         while theta_current <= theta2:
-            mask_left = (self.theta_filtered >= theta1) & (self.theta_filtered < theta_current)
-            mask_right = (self.theta_filtered >= theta_current) & (self.theta_filtered <= theta2)
+            mask_left = (self.theta_filtered >= theta1) & (self.theta_filtered <= theta_current) & \
+                       (self.r_filtered >= R1) & (self.r_filtered <= R2)
             
-            mask_left_full = mask_left & (self.r_filtered >= R1) & (self.r_filtered <= R2)
-            mask_right_full = mask_right & (self.r_filtered >= R1) & (self.r_filtered <= R2)
+            mask_right = (self.theta_filtered >= theta_current) & (self.theta_filtered <= theta2) & \
+                        (self.r_filtered >= R1) & (self.r_filtered <= R2)
             
-            terrain_left = 0.0
-            if np.any(mask_left_full):
-                z_avg_left = np.mean(self.z_rel_filtered[mask_left_full])
-                terrain_left = terrain_effect_cylindrical_sector(
-                    R1, R2, theta1, theta_current, z_avg_left, RHO
-                )
+            terrain_total = 0.0
             
-            terrain_right = 0.0
-            if np.any(mask_right_full):
-                z_avg_right = np.mean(self.z_rel_filtered[mask_right_full])
-                terrain_right = terrain_effect_cylindrical_sector(
-                    R1, R2, theta_current, theta2, z_avg_right, RHO
-                )
+            if np.any(mask_left):
+                z_avg_left = np.mean(self.z_rel_filtered[mask_left])
+                terrain_left = self._sector_effect(R1, R2, theta1, theta_current, z_avg_left)
+                terrain_total += terrain_left
             
-            total_terrain = terrain_left + terrain_right
+            if np.any(mask_right):
+                z_avg_right = np.mean(self.z_rel_filtered[mask_right])
+                terrain_right = self._sector_effect(R1, R2, theta_current, theta2, z_avg_right)
+                terrain_total += terrain_right
+            
             angles.append(theta_current)
-            terrain_values.append(total_terrain)
+            terrain_values.append(terrain_total)
             theta_current += theta_step
         
         turning_points = []
         if len(terrain_values) > 2:
             for i in range(1, len(terrain_values)-1):
-                diff1 = terrain_values[i] - terrain_values[i-1]
-                diff2 = terrain_values[i+1] - terrain_values[i]
-                if abs(diff2 - diff1) > tolerance:
+                second_deriv = terrain_values[i+1] - 2*terrain_values[i] + terrain_values[i-1]
+                if abs(second_deriv) > tolerance:
                     turning_points.append(angles[i])
         
         return turning_points
     
     def _find_turning_points_radius(self, theta1, theta2, R1, R2):
-        """Find turning points in radial direction"""
+        """Find turning points in radial direction - DIPERBAIKI"""
         r_step = self.params['r_step_near'] if R2 < 1000 else self.params['r_step_far']
         tolerance = self.params['tolerance_nGal'] * NANO_TO_MGAL
         
@@ -705,44 +431,42 @@ class OSSTerrainCorrector:
         
         R_current = R1
         while R_current <= R2:
-            mask_inner = (self.r_filtered >= R1) & (self.r_filtered < R_current)
-            mask_outer = (self.r_filtered >= R_current) & (self.r_filtered <= R2)
+            mask_inner = (self.r_filtered >= R1) & (self.r_filtered <= R_current) & \
+                        (self.theta_filtered >= theta1) & (self.theta_filtered <= theta2)
             
-            mask_inner_full = mask_inner & (self.theta_filtered >= theta1) & (self.theta_filtered <= theta2)
-            mask_outer_full = mask_outer & (self.theta_filtered >= theta1) & (self.theta_filtered <= theta2)
+            mask_outer = (self.r_filtered >= R_current) & (self.r_filtered <= R2) & \
+                        (self.theta_filtered >= theta1) & (self.theta_filtered <= theta2)
             
-            terrain_inner = 0.0
-            if np.any(mask_inner_full):
-                z_avg_inner = np.mean(self.z_rel_filtered[mask_inner_full])
-                terrain_inner = terrain_effect_cylindrical_sector(
-                    R1, R_current, theta1, theta2, z_avg_inner, RHO
-                )
+            terrain_total = 0.0
             
-            terrain_outer = 0.0
-            if np.any(mask_outer_full):
-                z_avg_outer = np.mean(self.z_rel_filtered[mask_outer_full])
-                terrain_outer = terrain_effect_cylindrical_sector(
-                    R_current, R2, theta1, theta2, z_avg_outer, RHO
-                )
+            if np.any(mask_inner):
+                z_avg_inner = np.mean(self.z_rel_filtered[mask_inner])
+                terrain_inner = self._sector_effect(R1, R_current, theta1, theta2, z_avg_inner)
+                terrain_total += terrain_inner
             
-            total_terrain = terrain_inner + terrain_outer
+            if np.any(mask_outer):
+                z_avg_outer = np.mean(self.z_rel_filtered[mask_outer])
+                terrain_outer = self._sector_effect(R_current, R2, theta1, theta2, z_avg_outer)
+                terrain_total += terrain_outer
+            
             radii.append(R_current)
-            terrain_values.append(total_terrain)
+            terrain_values.append(terrain_total)
             R_current += r_step
         
         turning_points = []
         if len(terrain_values) > 2:
             for i in range(1, len(terrain_values)-1):
-                diff1 = terrain_values[i] - terrain_values[i-1]
-                diff2 = terrain_values[i+1] - terrain_values[i]
-                if abs(diff2 - diff1) > tolerance:
+                second_deriv = terrain_values[i+1] - 2*terrain_values[i] + terrain_values[i-1]
+                if abs(second_deriv) > tolerance:
                     turning_points.append(radii[i])
         
         return turning_points
     
     def _process_sector(self, theta1, theta2, R1, R2, depth=0):
-        """Recursive sector processing"""
+        """Recursive sector processing - DIPERBAIKI"""
         threshold = self.params['threshold_mGal']
+        
+        debug = self.params.get('debug', False)
         
         mask = (self.theta_filtered >= theta1) & (self.theta_filtered <= theta2) & \
                (self.r_filtered >= R1) & (self.r_filtered <= R2)
@@ -755,120 +479,86 @@ class OSSTerrainCorrector:
         
         if len(z_sector) < self.params['min_points_per_sector']:
             z_avg = np.mean(z_sector) if len(z_sector) > 0 else 0.0
-            terrain = terrain_effect_cylindrical_sector(R1, R2, theta1, theta2, z_avg, RHO)
+            terrain = self._sector_effect(R1, R2, theta1, theta2, z_avg)
             return terrain, [(theta1, theta2, R1, R2, z_avg, terrain)]
         
         z_avg = np.mean(z_sector)
-        terrain_avg = terrain_effect_cylindrical_sector(R1, R2, theta1, theta2, z_avg, RHO)
+        terrain_avg = self._sector_effect(R1, R2, theta1, theta2, z_avg)
+        
+        if debug and depth <= 2:
+            st.write(f"  {'  '*depth}θ=[{theta1:.1f},{theta2:.1f}], r=[{R1:.0f},{R2:.0f}], "
+                    f"n={len(z_sector)}, z_avg={z_avg:.1f}, Δg={terrain_avg:.6f}")
         
         if abs(terrain_avg) < threshold:
             if self.params['use_optimized_elevation']:
                 Delta_theta = np.radians(theta2 - theta1)
                 deviations = z_sector - z_avg
                 z_opt = optimized_elevation(z_avg, deviations, R1, R2, Delta_theta, r_sector)
-                terrain_final = terrain_effect_cylindrical_sector(R1, R2, theta1, theta2, z_opt, RHO)
+                terrain_final = self._sector_effect(R1, R2, theta1, theta2, z_opt)
             else:
                 terrain_final = terrain_avg
                 z_opt = z_avg
             
             return terrain_final, [(theta1, theta2, R1, R2, z_opt, terrain_final)]
         
+        if debug and depth <= 2:
+            st.write(f"  {'  '*depth}  Δg={terrain_avg:.6f} > threshold={threshold}, subdividing...")
+        
         turning_points_theta = self._find_turning_points_theta(theta1, theta2, R1, R2)
         
         if turning_points_theta:
+            if debug and depth <= 2:
+                st.write(f"  {'  '*depth}  Found {len(turning_points_theta)} angular turning points")
+            
             total_terrain = 0.0
             all_subsectors = []
             angles = [theta1] + sorted(turning_points_theta) + [theta2]
             
             for i in range(len(angles)-1):
                 sub_theta1, sub_theta2 = angles[i], angles[i+1]
-                sub_mask = (self.theta_filtered >= sub_theta1) & (self.theta_filtered <= sub_theta2) & \
-                          (self.r_filtered >= R1) & (self.r_filtered <= R2)
-                
-                if np.any(sub_mask):
-                    z_sub = self.z_rel_filtered[sub_mask]
-                    z_avg_sub = np.mean(z_sub)
-                    terrain_sub = terrain_effect_cylindrical_sector(R1, R2, sub_theta1, sub_theta2, z_avg_sub, RHO)
-                    
-                    if abs(terrain_sub) >= threshold:
-                        turning_points_r = self._find_turning_points_radius(sub_theta1, sub_theta2, R1, R2)
-                        
-                        if turning_points_r:
-                            radii = [R1] + sorted(turning_points_r) + [R2]
-                            for j in range(len(radii)-1):
-                                sub_R1, sub_R2 = radii[j], radii[j+1]
-                                sub_terrain, sub_subsectors = self._process_sector(
-                                    sub_theta1, sub_theta2, sub_R1, sub_R2, depth+1
-                                )
-                                total_terrain += sub_terrain
-                                all_subsectors.extend(sub_subsectors)
-                        else:
-                            if self.params['use_optimized_elevation']:
-                                r_sub = self.r_filtered[sub_mask]
-                                Delta_theta = np.radians(sub_theta2 - sub_theta1)
-                                deviations = z_sub - z_avg_sub
-                                z_opt = optimized_elevation(z_avg_sub, deviations, R1, R2, Delta_theta, r_sub)
-                                terrain_final = terrain_effect_cylindrical_sector(
-                                    R1, R2, sub_theta1, sub_theta2, z_opt, RHO
-                                )
-                            else:
-                                terrain_final = terrain_sub
-                                z_opt = z_avg_sub
-                            
-                            total_terrain += terrain_final
-                            all_subsectors.append((sub_theta1, sub_theta2, R1, R2, z_opt, terrain_final))
-                    else:
-                        if self.params['use_optimized_elevation']:
-                            r_sub = self.r_filtered[sub_mask]
-                            Delta_theta = np.radians(sub_theta2 - sub_theta1)
-                            deviations = z_sub - z_avg_sub
-                            z_opt = optimized_elevation(z_avg_sub, deviations, R1, R2, Delta_theta, r_sub)
-                            terrain_final = terrain_effect_cylindrical_sector(
-                                R1, R2, sub_theta1, sub_theta2, z_opt, RHO
-                            )
-                        else:
-                            terrain_final = terrain_sub
-                            z_opt = z_avg_sub
-                        
-                        total_terrain += terrain_final
-                        all_subsectors.append((sub_theta1, sub_theta2, R1, R2, z_opt, terrain_final))
+                sub_terrain, sub_subsectors = self._process_sector(
+                    sub_theta1, sub_theta2, R1, R2, depth+1
+                )
+                total_terrain += sub_terrain
+                all_subsectors.extend(sub_subsectors)
             
             return total_terrain, all_subsectors
         
-        else:
-            turning_points_r = self._find_turning_points_radius(theta1, theta2, R1, R2)
+        turning_points_r = self._find_turning_points_radius(theta1, theta2, R1, R2)
+        
+        if turning_points_r:
+            if debug and depth <= 2:
+                st.write(f"  {'  '*depth}  Found {len(turning_points_r)} radial turning points")
             
-            if turning_points_r:
-                total_terrain = 0.0
-                all_subsectors = []
-                radii = [R1] + sorted(turning_points_r) + [R2]
-                
-                for i in range(len(radii)-1):
-                    sub_R1, sub_R2 = radii[i], radii[i+1]
-                    sub_terrain, sub_subsectors = self._process_sector(
-                        theta1, theta2, sub_R1, sub_R2, depth+1
-                    )
-                    total_terrain += sub_terrain
-                    all_subsectors.extend(sub_subsectors)
-                
-                return total_terrain, all_subsectors
-            else:
-                if self.params['use_optimized_elevation']:
-                    Delta_theta = np.radians(theta2 - theta1)
-                    deviations = z_sector - z_avg
-                    z_opt = optimized_elevation(z_avg, deviations, R1, R2, Delta_theta, r_sector)
-                    terrain_final = terrain_effect_cylindrical_sector(R1, R2, theta1, theta2, z_opt, RHO)
-                else:
-                    terrain_final = terrain_avg
-                    z_opt = z_avg
-                
-                return terrain_final, [(theta1, theta2, R1, R2, z_opt, terrain_final)]
+            total_terrain = 0.0
+            all_subsectors = []
+            radii = [R1] + sorted(turning_points_r) + [R2]
+            
+            for i in range(len(radii)-1):
+                sub_R1, sub_R2 = radii[i], radii[i+1]
+                sub_terrain, sub_subsectors = self._process_sector(
+                    theta1, theta2, sub_R1, sub_R2, depth+1
+                )
+                total_terrain += sub_terrain
+                all_subsectors.extend(sub_subsectors)
+            
+            return total_terrain, all_subsectors
+        
+        if self.params['use_optimized_elevation']:
+            Delta_theta = np.radians(theta2 - theta1)
+            deviations = z_sector - z_avg
+            z_opt = optimized_elevation(z_avg, deviations, R1, R2, Delta_theta, r_sector)
+            terrain_final = self._sector_effect(R1, R2, theta1, theta2, z_opt)
+        else:
+            terrain_final = terrain_avg
+            z_opt = z_avg
+        
+        return terrain_final, [(theta1, theta2, R1, R2, z_opt, terrain_final)]
     
     def calculate_terrain_correction(self):
         """Main method to calculate terrain correction"""
-        if self.params['debug']:
-            st.write(f"Starting OSS calculation for station at ({self.e0:.1f}, {self.n0:.1f})")
-            st.write(f"DEM points in radius: {len(self.r_filtered)}")
+        if self.params.get('debug', False):
+            st.write(f"🚀 Starting OSS calculation for station at ({self.e0:.1f}, {self.n0:.1f})")
         
         total_tc, subsectors = self._process_sector(
             theta1=0.0,
@@ -877,20 +567,22 @@ class OSSTerrainCorrector:
             R2=self.params['max_radius']
         )
         
-        if self.params['debug'] and subsectors:
-            st.write(f"Total TC: {total_tc:.6f} mGal")
-            st.write(f"Number of subsectors: {len(subsectors)}")
-            
-            subsectors_sorted = sorted(subsectors, key=lambda x: abs(x[5]), reverse=True)[:3]
-            st.write("Top 3 subsectors:")
-            for i, (t1, t2, r1, r2, z, tc) in enumerate(subsectors_sorted):
-                st.write(f"  {i+1}: θ={t1:.1f}-{t2:.1f}°, r={r1:.0f}-{r2:.0f}m, z={z:.1f}m, Δg={tc:.4f}mGal")
+        # Validasi: TC harus positif
+        if total_tc < 0:
+            if self.params.get('debug', False):
+                st.warning(f"⚠️ Negative TC ({total_tc:.3f} mGal). Taking absolute value.")
+            total_tc = abs(total_tc)
+        
+        if self.params.get('debug', False):
+            st.write(f"✅ Total TC: {total_tc:.3f} mGal")
+            if subsectors:
+                st.write(f"📊 Number of subsectors: {len(subsectors)}")
         
         return total_tc, subsectors
 
 def calculate_oss_correction(dem_df, station_row, params=None):
     """
-    Wrapper function for Streamlit integration dengan validasi
+    Wrapper function dengan koreksi yang benar
     """
     station_coords = (
         float(station_row['Easting']),
@@ -903,15 +595,198 @@ def calculate_oss_correction(dem_df, station_row, params=None):
     
     return tc_value
 
-# -----------------------
-# UI
-# -----------------------
+# ============================================================
+# FUNGSI VALIDASI DAN PLOTTING
+# ============================================================
+def validate_tc_value(tc_value, station_name, debug=False):
+    """Validasi nilai TC yang reasonable"""
+    validated_tc = tc_value
+    
+    if tc_value < -0.5:
+        if debug:
+            st.warning(f"Station {station_name}: TC sangat negatif ({tc_value:.3f} mGal)")
+        validated_tc = max(tc_value, 0.0)
+    
+    elif tc_value > 50.0:
+        if debug:
+            st.warning(f"Station {station_name}: TC sangat besar ({tc_value:.1f} mGal)")
+        validated_tc = min(tc_value, 100.0)
+    
+    elif 0 <= tc_value < 0.01:
+        if debug:
+            st.warning(f"Station {station_name}: TC sangat kecil ({tc_value:.6f} mGal)")
+    
+    return validated_tc
+
+def plot_dem_elevation(dem_df, stations_df=None):
+    """Plot elevation dari DEM dengan overlay stasiun"""
+    x_dem = dem_df["Easting"]
+    y_dem = dem_df["Northing"]
+    z_dem = dem_df["Elev"]
+    
+    xi = np.linspace(x_dem.min(), x_dem.max(), 200)
+    yi = np.linspace(y_dem.min(), y_dem.max(), 200)
+    XI, YI = np.meshgrid(xi, yi)
+    
+    ZI = griddata((x_dem, y_dem), z_dem, (XI, YI), method='cubic')
+    
+    fig, ax = plt.subplots(figsize=(10, 8))
+    contour = ax.contourf(XI, YI, ZI, 40, cmap='terrain', alpha=0.8)
+    
+    if stations_df is not None:
+        ax.scatter(stations_df['Easting'], stations_df['Northing'], 
+                  c='red', s=50, marker='^', edgecolor='black',
+                  label='Gravity Stations', zorder=5)
+    
+    ax.set_xlabel('Easting (m)')
+    ax.set_ylabel('Northing (m)')
+    ax.set_title('Topography from DEM with Gravity Stations')
+    cbar = fig.colorbar(contour, ax=ax)
+    cbar.set_label('Elevation (m)')
+    
+    if stations_df is not None:
+        ax.legend()
+    
+    ax.grid(True, alpha=0.3)
+    plt.tight_layout()
+    
+    return fig
+
+def plot_cont(x, y, z, title):
+    """Plot contour dari data"""
+    gx = np.linspace(x.min(), x.max(), 200)
+    gy = np.linspace(y.min(), y.max(), 200)
+    GX, GY = np.meshgrid(gx, gy)
+    
+    Z = griddata((x, y), z, (GX, GY), method="cubic")
+    
+    fig, ax = plt.subplots(figsize=(8, 6))
+    cf = ax.contourf(GX, GY, Z, 40, cmap="jet")
+    ax.scatter(x, y, c=z, cmap="jet", s=12, edgecolor="k")
+    ax.set_xlabel('Easting (m)')
+    ax.set_ylabel('Northing (m)')
+    ax.set_title(title)
+    fig.colorbar(cf, ax=ax, label='Value (mGal)')
+    
+    return fig
+
+def create_interactive_scatter(df, x_col, y_col, color_col, title, hover_cols=None):
+    """Buat scatter plot interaktif dengan Plotly"""
+    if not PLOTLY_AVAILABLE:
+        return None
+    
+    if hover_cols is None:
+        hover_cols = ['Nama', 'Elev', 'Lon', 'Lat']
+    
+    hover_data = {col: df[col] for col in hover_cols if col in df.columns}
+    
+    fig = px.scatter(
+        df,
+        x=x_col,
+        y=y_col,
+        color=color_col,
+        hover_data=hover_data,
+        title=title,
+        color_continuous_scale='viridis',
+        size_max=15
+    )
+    
+    fig.update_layout(
+        title=dict(text=title, font=dict(size=16)),
+        xaxis_title=x_col,
+        yaxis_title=y_col,
+        hovermode='closest',
+        showlegend=True
+    )
+    
+    return fig
+
+# ============================================================
+# TEST FUNCTION UNTUK VALIDASI
+# ============================================================
+def run_oss_test():
+    """Test OSS dengan data sederhana untuk validasi"""
+    st.subheader("🧪 OSS Algorithm Test")
+    
+    # Buat data test
+    test_dem_data = {
+        'Easting': [0, 50, 50, 0, -50, -50, 0, 35, -35, 25, -25],
+        'Northing': [50, 0, -50, -50, 0, 50, 0, 35, -35, -25, 25],
+        'Elev': [200, 150, 50, 80, 120, 180, 100, 130, 70, 90, 110]
+    }
+    
+    test_dem_df = pd.DataFrame(test_dem_data)
+    
+    test_stations = [
+        {'Nama': 'TEST_CENTER', 'Easting': 0, 'Northing': 0, 'Elev': 100, 'Lat': 0, 'Lon': 0},
+        {'Nama': 'TEST_HILL', 'Easting': 30, 'Northing': 30, 'Elev': 150, 'Lat': 0, 'Lon': 0},
+        {'Nama': 'TEST_VALLEY', 'Easting': -30, 'Northing': -30, 'Elev': 50, 'Lat': 0, 'Lon': 0}
+    ]
+    
+    results = []
+    
+    for station in test_stations:
+        for th in [0.001, 0.01, 0.05, 0.1, 0.5]:
+            params = {
+                'threshold_mGal': th,
+                'debug': False,
+                'max_radius': 100,
+                'density': RHO
+            }
+            
+            tc = calculate_oss_correction(test_dem_df, pd.Series(station), params)
+            
+            results.append({
+                'Station': station['Nama'],
+                'Threshold': th,
+                'TC': tc,
+                'Elevation': station['Elev']
+            })
+    
+    results_df = pd.DataFrame(results)
+    
+    fig, axes = plt.subplots(1, 2, figsize=(14, 5))
+    
+    for station in results_df['Station'].unique():
+        station_data = results_df[results_df['Station'] == station]
+        axes[0].plot(station_data['Threshold'], station_data['TC'], 
+                    'o-', label=station, linewidth=2)
+    
+    axes[0].set_xlabel('Threshold (mGal)')
+    axes[0].set_ylabel('Terrain Correction (mGal)')
+    axes[0].set_title('TC vs Threshold (Should have plateau)')
+    axes[0].set_xscale('log')
+    axes[0].grid(True, alpha=0.3)
+    axes[0].legend()
+    
+    scatter = axes[1].scatter(results_df['Elevation'], results_df['TC'], 
+                             c=results_df['Threshold'], cmap='viridis', s=100)
+    axes[1].set_xlabel('Station Elevation (m)')
+    axes[1].set_ylabel('Terrain Correction (mGal)')
+    axes[1].set_title('TC vs Elevation (Should correlate)')
+    axes[1].grid(True, alpha=0.3)
+    plt.colorbar(scatter, ax=axes[1], label='Threshold (mGal)')
+    
+    plt.tight_layout()
+    st.pyplot(fig)
+    
+    st.write("**Expected Results:**")
+    st.write("1. **Left plot:** TC should stabilize (plateau) as threshold changes")
+    st.write("2. **Right plot:** TC should correlate with station elevation")
+    st.write("3. **TC values:** Should be positive and realistic (0-20 mGal for this test)")
+    
+    return results_df
+
+# ============================================================
+# UI STREAMLIT
+# ============================================================
 st.markdown(
     f"""
     <div style="display:flex; align-items:center;">
         <img src="https://raw.githubusercontent.com/dzakyw/AutoGrav/main/logo esdm.png" style="width:200px; margin-right:5px;">
         <div>
             <h2 style="margin-bottom:0;">Auto Grav - Semua Terasa Cepat</h2>
+            <p style="color:red; font-weight:bold;">OSS Algorithm Corrected Version</p>
         </div>
     </div>
     <hr>
@@ -919,32 +794,36 @@ st.markdown(
     unsafe_allow_html=True
 )
 
+# ============================================================
+# SIDEBAR CONTROLS
+# ============================================================
 st.sidebar.header("Input Files")
 grav = st.sidebar.file_uploader("Input Gravity Multi-Sheets (.xlsx)", type=["xlsx"])
 demf = st.sidebar.file_uploader("Upload DEM (CSV/XYZ/TIFF)", type=["csv","txt","xyz","tif","tiff"])
 kmf = st.sidebar.file_uploader("Koreksi Medan manual (optional)", type=["csv","xlsx"])
 G_base = st.sidebar.number_input("G Absolute di Base", value=0.0)
-# Di sidebar, tambahkan opsi untuk interactive plots
+
+# Test button
+if st.sidebar.button("🧪 Run OSS Test"):
+    run_oss_test()
+
 st.sidebar.subheader("Interactive Plot Options")
 enable_interactive = st.sidebar.checkbox("Enable Interactive Plots", value=True)
-map_provider = st.sidebar.selectbox(
-    "Map/Plot Provider",
-    ["Plotly (Recommended)", "Folium (Interactive Map)", "Matplotlib (Static)"],
-    index=0
-)
+
 # ============================================================
 # PARAMETER OSS
 # ============================================================
-debug_mode = st.sidebar.checkbox("🛠️ Debug Mode", value=False)
-
 st.sidebar.subheader("OSS Algorithm Parameters")
+debug_mode = st.sidebar.checkbox("🛠️ Debug Mode", value=False)
+st.session_state.debug_mode = debug_mode
+
 threshold_mgal = st.sidebar.slider(
     "Threshold (mGal) for subdivision",
-    min_value=0.01,
-    max_value=0.2,
-    value=0.1,
-    step=0.01,
-    help="Nilai lebih kecil = lebih banyak subdivision, lebih akurat"
+    min_value=0.001,
+    max_value=0.5,
+    value=0.05,
+    step=0.001,
+    help="Start with 0.05 mGal for optimal results"
 )
 
 max_radius = st.sidebar.number_input(
@@ -976,15 +855,14 @@ min_points_sector = st.sidebar.number_input(
     help="Sector dengan points < ini tidak di-subdivide"
 )
 
-run = st.sidebar.button("Run Processing", type="primary")
+run = st.sidebar.button("🚀 Run Processing", type="primary")
 
 st.sidebar.subheader("Contoh File Input")
 st.sidebar.write("[Contoh Data Input Gravity](https://github.com/dzakyw/AutoGrav/raw/9bb43e1559c823350f2371360309d84eaab5ea38/sample_gravity.xlsx)")
 st.sidebar.write("[Contoh DEM dengan format .txt](https://github.com/dzakyw/AutoGrav/raw/9bb43e1559c823350f2371360309d84eaab5ea38/sample_dem.csv)")
-st.sidebar.write("[Contoh Koreksi Medan](https://github.com/dzakyw/AutoGrav/raw/9bb43e1559c823350f2371360309d84eaab5ea38/sample_koreksi_medan.csv)")
 
 # ============================================================
-# MAIN PROCESSING - HANYA OSS
+# MAIN PROCESSING
 # ============================================================
 if run:
     if grav is None:
@@ -997,7 +875,6 @@ if run:
             dem = load_dem(demf)
             st.success(f"✅ DEM loaded: {len(dem):,} points.")
             
-            # Tampilkan info DEM
             col1, col2 = st.columns(2)
             with col1:
                 st.info(f"**DEM Statistics:**")
@@ -1009,13 +886,11 @@ if run:
                 st.info(f"**Spatial Coverage:**")
                 st.write(f"- Easting: {dem['Easting'].min():.0f} to {dem['Easting'].max():.0f} m")
                 st.write(f"- Northing: {dem['Northing'].min():.0f} to {dem['Northing'].max():.0f} m")
-                st.write(f"- Area: {(dem['Easting'].max()-dem['Easting'].min())/1000:.1f} × {(dem['Northing'].max()-dem['Northing'].min())/1000:.1f} km")
         
         except Exception as e:
             st.error(f"DEM load failed: {e}")
             st.stop()
     
-    # load manual koreksi jika ada
     km_map = None
     if kmf:
         try:
@@ -1033,7 +908,6 @@ if run:
         st.error("Anda harus upload DEM atau file koreksi medan manual.")
         st.stop()
     
-    # read excel
     try:
         xls = pd.ExcelFile(grav)
     except Exception as e:
@@ -1043,11 +917,9 @@ if run:
     all_dfs = []
     t0 = time.time()
     
-    # Container untuk statistics
     tc_stats = []
     station_details = []
     
-    # Parameter OSS
     oss_params = {
         'max_radius': max_radius,
         'tolerance_nGal': 1.0,
@@ -1057,7 +929,8 @@ if run:
         'r_step_far': 50.0,
         'min_points_per_sector': min_points_sector,
         'use_optimized_elevation': use_optimized_elev,
-        'debug': debug_mode
+        'debug': debug_mode,
+        'density': density
     }
     
     st.info(f"**OSS Parameters:** Max radius = {max_radius} m, Threshold = {threshold_mgal} mGal, Density = {density} kg/m³")
@@ -1073,27 +946,20 @@ if run:
             st.warning(f"Sheet {sh} dilewati (kolom tidak lengkap).")
             continue
         
-        # Update progress
         sheet_progress = (sheet_idx + 1) / total_sheets
         sheet_progress_bar.progress(sheet_progress)
         
-        # UTM conversion for stations
         E, N, _, _ = latlon_to_utm_redfearn(df["Lat"].to_numpy(), df["Lon"].to_numpy())
         df["Easting"] = E
         df["Northing"] = N
         
-        # Drift correction
         Gmap, D = compute_drift(df, G_base)
         df["G_read (mGal)"] = df["Nama"].map(Gmap)
         
-        # Basic corrections
         df["Koreksi Lintang"] = latitude_correction(df["Lat"])
         df["Free Air Correction"] = free_air(df["Elev"])
         df["FAA"] = df["G_read (mGal)"] - df["Koreksi Lintang"] + df["Free Air Correction"]
         
-        # ============================================================
-        # TERRAIN CORRECTION - HANYA OSS
-        # ============================================================
         tc_list = []
         nstations = len(df)
         
@@ -1104,22 +970,17 @@ if run:
             station_data = df.iloc[i]
             station_name = station_data['Nama']
             
-            # Update progress
             progress = (i + 1) / nstations
             progress_bar.progress(progress)
             status_text.text(f"Sheet {sh}: Station {i+1}/{nstations} ({station_name})")
             
-            # Gunakan koreksi manual jika tersedia
             if km_map is not None and station_name in km_map:
                 tc_val = km_map[station_name]
                 if debug_mode:
                     st.write(f"{station_name}: Using manual TC = {tc_val:.3f} mGal")
             
-            # Hitung dengan OSS jika ada DEM
             elif dem is not None:
                 tc_val = calculate_oss_correction(dem, station_data, oss_params)
-                
-                # VALIDASI TC VALUE
                 tc_val = validate_tc_value(tc_val, station_name, debug_mode)
                 
                 if debug_mode:
@@ -1129,7 +990,6 @@ if run:
                 if debug_mode:
                     st.write(f"{station_name}: No DEM or manual TC available, using 0.0 mGal")
             
-            # Simpan detail
             station_details.append({
                 'Sheet': sh,
                 'Station': station_name,
@@ -1148,7 +1008,6 @@ if run:
         progress_bar.empty()
         status_text.empty()
         
-        # Tampilkan statistik TC untuk sheet ini jika debug
         if debug_mode and tc_list:
             tc_array = np.array(tc_list)
             with st.expander(f"TC Statistics for Sheet {sh}"):
@@ -1159,9 +1018,6 @@ if run:
                     st.metric("Min", f"{tc_array.min():.3f} mGal")
                 with col3:
                     st.metric("Max", f"{tc_array.max():.3f} mGal")
-                
-                if tc_array.max() - tc_array.min() > 10:
-                    st.warning("⚠️ Wide range of TC values in this sheet!")
         
         df["Koreksi Medan"] = tc_list
         df["X-Parasnis"] = 0.04192 * df["Elev"] - df["Koreksi Medan"]
@@ -1179,9 +1035,6 @@ if run:
     df_all = pd.concat(all_dfs, ignore_index=True)
     elapsed = time.time() - t0
     
-    # ============================================================
-    # TAMPILKAN FINAL STATISTICS
-    # ============================================================
     st.success(f"✅ Processing completed in {elapsed:.1f} seconds")
     
     if tc_stats:
@@ -1198,7 +1051,6 @@ if run:
         with col4:
             st.metric("Max TC", f"{tc_values.max():.3f} mGal")
         
-        # Histogram TC values
         fig_hist, ax_hist = plt.subplots(figsize=(10, 4))
         ax_hist.hist(tc_values, bins=30, alpha=0.7, edgecolor='black')
         ax_hist.set_xlabel('Terrain Correction (mGal)')
@@ -1206,17 +1058,11 @@ if run:
         ax_hist.set_title('Distribution of Terrain Correction Values')
         ax_hist.grid(True, alpha=0.3)
         st.pyplot(fig_hist)
-        
-        # Warning jika range terlalu besar
-        if tc_values.max() - tc_values.min() > 15:
-            st.warning("⚠️ Very wide range of TC values! Some stations may have issues.")
     
-    # slope and Bouguer
     mask = df_all[["X-Parasnis","Y-Parasnis"]].notnull().all(axis=1)
     if mask.sum() >= 2:
         slope, intercept = np.polyfit(df_all.loc[mask,"X-Parasnis"], df_all.loc[mask,"Y-Parasnis"], 1)
         
-        # Hitung R-squared
         y_pred = slope * df_all.loc[mask,"X-Parasnis"] + intercept
         y_actual = df_all.loc[mask,"Y-Parasnis"]
         r_squared = 1 - np.sum((y_actual - y_pred)**2) / np.sum((y_actual - np.mean(y_actual))**2)
@@ -1233,26 +1079,16 @@ if run:
     df_all["Simple Bouger Anomaly"] = df_all["FAA"] - df_all["Bouger Correction"]
     df_all["Complete Bouger Anomaly"] = df_all["Simple Bouger Anomaly"] + df_all["Koreksi Medan"]
     
-    # ============================================================
-    # TAMPILKAN HASIL
-    # ============================================================
     st.subheader("📋 Processed Results")
     
-    # Tampilkan preview data
     with st.expander("View Data Preview", expanded=True):
         st.dataframe(df_all.head(20))
-        
-        # Summary stats
         st.write(f"**Total rows processed:** {len(df_all)}")
         st.write(f"**Total sheets processed:** {len(all_dfs)}")
     
-    # ============================================================
-    # PLOTTING - DENGAN PETA INDONESIA
-    # ============================================================
-    st.subheader("📈 Visualization with Indonesia Map")
+    st.subheader("📈 Visualization")
     
-    # Buat tabs untuk plotting
-    tab1, tab2, tab3, tab4, tab5 = st.tabs(["Parasnis Plot", "Topography", "CBA Map", "SBA Map", "Indonesia Map View"])
+    tab1, tab2, tab3, tab4 = st.tabs(["Parasnis Plot", "Topography", "CBA Map", "Data Export"])
     
     with tab1:
         if mask.sum() >= 2:
@@ -1262,7 +1098,6 @@ if run:
             fig_parasnis, ax_parasnis = plt.subplots(figsize=(8, 6))
             ax_parasnis.scatter(X, Y, s=25, color="blue", label="Data Parasnis", alpha=0.7)
             
-            # Regression line
             X_line = np.linspace(min(X), max(X), 100)
             Y_line = slope * X_line + intercept
             ax_parasnis.plot(X_line, Y_line, color="red", linewidth=2,
@@ -1285,20 +1120,12 @@ if run:
     
     with tab2:
         if dem is not None:
-            # Plot topography dari DEM
             fig_topo = plot_dem_elevation(dem, df_all)
             st.pyplot(fig_topo)
-            st.caption("Topography from DEM with gravity station locations (red triangles)")
         else:
-            # Fallback ke plotting dari stasiun
-            st.info("No DEM available for topography plot. Showing station elevations only.")
-            if len(df_all) > 0:
-                fig_station = plot_cont(df_all["Easting"], df_all["Northing"], df_all["Elev"], 
-                                      "Station Elevations (from gravity data)")
-                st.pyplot(fig_station)
+            st.info("No DEM available for topography plot.")
     
     with tab3:
-        # Complete Bouguer Anomaly Map
         if len(df_all) > 0:
             fig_cba = plot_cont(df_all["Easting"], df_all["Northing"], 
                                df_all["Complete Bouger Anomaly"], 
@@ -1308,216 +1135,28 @@ if run:
             st.warning("No data available for CBA plot.")
     
     with tab4:
-        # Simple Bouguer Anomaly Map
-        if len(df_all) > 0:
-            fig_sba = plot_cont(df_all["Easting"], df_all["Northing"], 
-                               df_all["Simple Bouger Anomaly"], 
-                               "Simple Bouguer Anomaly")
-            st.pyplot(fig_sba)
-        else:
-            st.warning("No data available for SBA plot.")
-    
-    with tab5:
-        # ============================================================
-        # PLOTTING INTERAKTIF DENGAN PLOTLY ATAU FOLIUM
-        # ============================================================
-        st.subheader("🔍 Interactive Visualization")
+        st.subheader("💾 Download Results")
         
-        if enable_interactive:
-            # Pilihan data untuk diplot
-            plot_option = st.selectbox(
-                "Select data to visualize:",
-                ["Complete Bouguer Anomaly", "Simple Bouguer Anomaly", 
-                 "Elevation", "Terrain Correction", "FAA (Free Air Anomaly)"],
-                key="interactive_plot_option"
-            )
-            
-            # Tentukan kolom berdasarkan pilihan
-            if plot_option == "Complete Bouguer Anomaly":
-                value_col = "Complete Bouger Anomaly"
-                cmap = "Viridis"
-            elif plot_option == "Simple Bouguer Anomaly":
-                value_col = "Simple Bouger Anomaly"
-                cmap = "RdBu"
-            elif plot_option == "Elevation":
-                value_col = "Elev"
-                cmap = "Plasma"
-            elif plot_option == "Terrain Correction":
-                value_col = "Koreksi Medan"
-                cmap = "Viridis"
-            else:  # FAA
-                value_col = "FAA"
-                cmap = "RdBu"
-            
-            # Pilihan jenis plot
-            plot_type = st.radio(
-                "Select plot type:",
-                ["Scatter Plot", "Contour Plot", "Interactive Map"],
-                horizontal=True
-            )
-            
-            # Container untuk plot
-            plot_container = st.container()
-            
-            with plot_container:
-                if plot_type == "Scatter Plot" and PLOTLY_AVAILABLE:
-                    st.info(f"🔹 **Interactive Scatter Plot**: {plot_option}")
-                    st.write("**Fitur interaktif:** Zoom (scroll/mouse), Pan (drag), Hover (lihat detail), Reset (double-click)")
-                    
-                    # Buat plot
-                    fig_scatter = create_interactive_scatter(
-                        df=df_all,
-                        x_col='Lon',
-                        y_col='Lat',
-                        color_col=value_col,
-                        title=f'{plot_option} - Interactive Scatter Plot',
-                        hover_cols=['Nama', 'Elev', 'Complete Bouger Anomaly', 'Koreksi Medan']
-                    )
-                    
-                    if fig_scatter:
-                        st.plotly_chart(fig_scatter, use_container_width=True, theme="streamlit")
-                        
-                        # Kontrol tambahan
-                        col1, col2, col3 = st.columns(3)
-                        with col1:
-                            point_size = st.slider("Point Size", 5, 20, 10)
-                            fig_scatter.update_traces(marker=dict(size=point_size))
-                        with col2:
-                            opacity = st.slider("Opacity", 0.1, 1.0, 0.8)
-                            fig_scatter.update_traces(marker=dict(opacity=opacity))
-                        with col3:
-                            if st.button("Reset View"):
-                                fig_scatter.update_layout(
-                                    xaxis=dict(range=[df_all['Lon'].min(), df_all['Lon'].max()]),
-                                    yaxis=dict(range=[df_all['Lat'].min(), df_all['Lat'].max()])
-                                )
-                        
-                        # Tampilkan ulang dengan update
-                        st.plotly_chart(fig_scatter, use_container_width=True, theme="streamlit")
-                    
-                    else:
-                        st.warning("Plotly tidak tersedia. Install dengan: `pip install plotly`")
-                
-                elif plot_type == "Contour Plot" and PLOTLY_AVAILABLE:
-                    st.info(f"🔹 **Interactive Contour Plot**: {plot_option}")
-                    st.write("**Fitur interaktif:** Zoom, Pan, Hover pada kontur dan titik stasiun")
-                    
-                    fig_contour = create_contour_interactive(
-                        df=df_all,
-                        x_col='Lon',
-                        y_col='Lat',
-                        z_col=value_col,
-                        title=f'{plot_option} - Contour Plot'
-                    )
-                    
-                    if fig_contour:
-                        st.plotly_chart(fig_contour, use_container_width=True, theme="streamlit")
-                    else:
-                        st.warning("Plotly tidak tersedia.")
-                
-                elif plot_type == "Interactive Map" and FOLIUM_AVAILABLE:
-                    st.info(f"🔹 **Interactive Folium Map**: {plot_option}")
-                    st.write("**Fitur interaktif:** Zoom (scroll/mouse), Pan (drag), Click markers untuk detail, Layer control")
-                    
-                    # Kontrol peta
-                    col1, col2 = st.columns(2)
-                    with col1:
-                        zoom_level = st.slider("Zoom Level", 5, 15, 10)
-                    with col2:
-                        tile_layer = st.selectbox(
-                            "Map Style",
-                            ["OpenStreetMap", "Stamen Terrain", "CartoDB positron", "CartoDB dark_matter"],
-                            index=0
-                        )
-                    
-                    # Buat peta
-                    folium_map = create_folium_map(
-                        df=df_all,
-                        zoom_start=zoom_level
-                    )
-                    
-                    if folium_map:
-                        # Simpan peta ke HTML temporary
-                        import tempfile
-                        import streamlit.components.v1 as components
-                        
-                        with tempfile.NamedTemporaryFile(delete=False, suffix='.html') as tmpfile:
-                            folium_map.save(tmpfile.name)
-                            
-                            # Baca HTML dan tampilkan di Streamlit
-                            with open(tmpfile.name, 'r', encoding='utf-8') as f:
-                                html_content = f.read()
-                            
-                            components.html(html_content, height=500)
-                        
-                        st.caption("**Tips:** Gunakan mouse wheel untuk zoom, drag untuk pan, klik marker untuk detail")
-                    else:
-                        st.warning("Folium tidak tersedia. Install dengan: `pip install folium`")
-                
-                else:
-                    # Fallback ke plot statis jika tidak ada library interaktif
-                    st.warning("Library interaktif tidak tersedia. Menampilkan plot statis...")
-                    
-                    if len(df_all) > 0:
-                        fig_static, ax_static = plt.subplots(figsize=(10, 8))
-                        scatter = ax_static.scatter(
-                            df_all['Lon'], df_all['Lat'],
-                            c=df_all[value_col], cmap=cmap, s=50, alpha=0.7
-                        )
-                        ax_static.set_xlabel('Longitude (°E)')
-                        ax_static.set_ylabel('Latitude (°N)')
-                        ax_static.set_title(f'{plot_option} - Static Plot')
-                        ax_static.grid(True, alpha=0.3)
-                        plt.colorbar(scatter, ax=ax_static, label=value_col)
-                        st.pyplot(fig_static)
-            
-            # Panel informasi samping
-            with st.sidebar.expander("📊 Interactive Plot Info", expanded=True):
-                st.write("**Available Interactions:**")
-                st.write("• **Zoom:** Mouse wheel or box zoom")
-                st.write("• **Pan:** Click and drag")
-                st.write("• **Hover:** Mouse over points for details")
-                st.write("• **Reset:** Double-click on plot")
-                st.write("• **Download:** Camera icon on plot toolbar")
-                
-                st.write("**Installation Tips:**")
-                if not PLOTLY_AVAILABLE:
-                    st.code("pip install plotly", language="bash")
-                if not FOLIUM_AVAILABLE:
-                    st.code("pip install folium", language="bash")
+        col1, col2 = st.columns(2)
         
-        else:
-            st.info("Interactive plots are disabled. Enable in sidebar options.")
-    
-    # ============================================================
-    # DOWNLOAD OPTIONS
-    # ============================================================
-    st.subheader("💾 Download Results")
-    
-    col1, col2 = st.columns(2)
-    
-    with col1:
-        # Download main results
-        csv = df_all.to_csv(index=False)
-        st.download_button(
-            label="Download Processed Data (.csv)",
-            data=csv.encode('utf-8'),
-            file_name="autograv_results.csv",
-            mime="text/csv"
-        )
-    
-    with col2:
-        # Download station details
-        if station_details:
-            details_df = pd.DataFrame(station_details)
-            details_csv = details_df.to_csv(index=False)
+        with col1:
+            csv = df_all.to_csv(index=False)
             st.download_button(
-                label="Download Station Details (.csv)",
-                data=details_csv.encode('utf-8'),
-                file_name="autograv_station_details.csv",
+                label="Download Processed Data (.csv)",
+                data=csv.encode('utf-8'),
+                file_name="autograv_results.csv",
                 mime="text/csv"
             )
-    
-    st.info("✅ Processing complete! Use the download buttons above to save your results.")
-
-
+        
+        with col2:
+            if station_details:
+                details_df = pd.DataFrame(station_details)
+                details_csv = details_df.to_csv(index=False)
+                st.download_button(
+                    label="Download Station Details (.csv)",
+                    data=details_csv.encode('utf-8'),
+                    file_name="autograv_station_details.csv",
+                    mime="text/csv"
+                )
+        
+        st.info("✅ Processing complete! Download your results above.")
