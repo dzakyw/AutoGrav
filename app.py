@@ -371,6 +371,36 @@ def plot_dem_elevation(dem_df, stations_df=None):
     return fig
 
 # ============================================================
+# HELPER FUNCTION UNTUK PLOTTING CONTOUR
+# ============================================================
+def plot_cont(x, y, z, title):
+    """
+    Plot contour dari data
+    Parameters:
+    x, y: koordinat
+    z: nilai untuk contour
+    title: judul plot
+    """
+    # Buat grid untuk contour
+    gx = np.linspace(x.min(), x.max(), 200)
+    gy = np.linspace(y.min(), y.max(), 200)
+    GX, GY = np.meshgrid(gx, gy)
+    
+    # Interpolasi
+    Z = griddata((x, y), z, (GX, GY), method="cubic")
+    
+    # Plot
+    fig, ax = plt.subplots(figsize=(8, 6))
+    cf = ax.contourf(GX, GY, Z, 40, cmap="jet")
+    ax.scatter(x, y, c=z, cmap="jet", s=12, edgecolor="k")
+    ax.set_xlabel('Easting (m)')
+    ax.set_ylabel('Northing (m)')
+    ax.set_title(title)
+    fig.colorbar(cf, ax=ax, label='Value (mGal)')
+    
+    return fig
+
+# ============================================================
 # CLASS OSSTerrainCorrector YANG DIPERBAIKI
 # ============================================================
 class OSSTerrainCorrector:
@@ -1049,31 +1079,30 @@ if run:
         else:
             # Fallback ke plotting dari stasiun
             st.info("No DEM available for topography plot. Showing station elevations only.")
-            plot_cont(df_all["Elev"], "Station Elevations (from gravity data)")
+            if len(df_all) > 0:
+                fig_station = plot_cont(df_all["Easting"], df_all["Northing"], df_all["Elev"], 
+                                      "Station Elevations (from gravity data)")
+                st.pyplot(fig_station)
     
     with tab3:
         # Complete Bouguer Anomaly Map
-        plot_cont(df_all["Complete Bouger Anomaly"], "Complete Bouguer Anomaly")
+        if len(df_all) > 0:
+            fig_cba = plot_cont(df_all["Easting"], df_all["Northing"], 
+                               df_all["Complete Bouger Anomaly"], 
+                               "Complete Bouguer Anomaly")
+            st.pyplot(fig_cba)
+        else:
+            st.warning("No data available for CBA plot.")
     
     with tab4:
         # Simple Bouguer Anomaly Map
-        plot_cont(df_all["Simple Bouger Anomaly"], "Simple Bouguer Anomaly")
-    
-    # Helper function untuk plotting contour
-    def plot_cont(z, title):
-        x = df_all["Easting"]
-        y = df_all["Northing"]
-        gx = np.linspace(x.min(), x.max(), 200)
-        gy = np.linspace(y.min(), y.max(), 200)
-        GX, GY = np.meshgrid(gx, gy)
-        
-        Z = griddata((x, y), z, (GX, GY), method="cubic")
-        fig, ax = plt.subplots(figsize=(8, 6))
-        cf = ax.contourf(GX, GY, Z, 40, cmap="jet")
-        ax.scatter(x, y, c=z, cmap="jet", s=12, edgecolor="k")
-        ax.set_title(title)
-        fig.colorbar(cf, ax=ax)
-        st.pyplot(fig)
+        if len(df_all) > 0:
+            fig_sba = plot_cont(df_all["Easting"], df_all["Northing"], 
+                               df_all["Simple Bouger Anomaly"], 
+                               "Simple Bouguer Anomaly")
+            st.pyplot(fig_sba)
+        else:
+            st.warning("No data available for SBA plot.")
     
     # ============================================================
     # DOWNLOAD OPTIONS
