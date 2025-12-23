@@ -784,11 +784,11 @@ G_base = st.sidebar.number_input("G Absolute di Base", value=0.0)
 # ============================================================
 debug_mode = st.sidebar.checkbox("🛠️ Debug Mode", value=False)
 
-with st.sidebar.expander("⚙️ OSS Algorithm Parameters", expanded=debug_mode):
+with st.sidebar.expander("OSS Algorithm Parameters", expanded=debug_mode):
     threshold_mgal = st.slider(
         "Threshold (mGal) for subdivision",
         min_value=0.01,
-        max_value=2.0,
+        max_value=0.2,
         value=0.1,  # DIKURANGI dari 1.0 ke 0.1
         step=0.01,
         help="Nilai lebih kecil = lebih banyak subdivision, lebih akurat"
@@ -1109,3 +1109,4 @@ if run:
     # download
     st.download_button("Download CSV", df_all.to_csv(index=False).encode("utf-8"),
                       "Hasil Perhitungan.csv")
+
