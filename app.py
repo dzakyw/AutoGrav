@@ -194,9 +194,9 @@ def load_dem(file):
     raise ValueError("DEM format unsupported. Use: CSV, XYZ, TXT, TIFF")
 
 # -----------------------
-# Drift solver - DIPERBAIKI dengan validasi duplikat
+# Drift solver - DIPERBAIKI
 # -----------------------
-def compute_drift(df, G_base):
+def compute_drift(df, G_base, debug_mode=False):
     df = df.copy()
     df["Time"] = pd.to_datetime(df["Time"], format="%H:%M:%S", errors="raise")
     df["G_read (mGal)"] = pd.to_numeric(df["G_read (mGal)"], errors="coerce")
@@ -214,7 +214,8 @@ def compute_drift(df, G_base):
         (duplicate_check['Elev'] > 1)
     ]
     
-    if not problematic_stations.empty and st.session_state.get('debug_mode', False):
+    # PERBAIKAN: Gunakan parameter debug_mode, bukan st.session_state
+    if not problematic_stations.empty and debug_mode:
         st.warning(f"⚠️ Found stations with same name but different coordinates: {problematic_stations.index.tolist()}")
     
     names = df["Nama"].astype(str).tolist()
@@ -255,7 +256,6 @@ def compute_drift(df, G_base):
         Gmap[st] = float(x[idx])
     
     return Gmap, D
-
 # -----------------------
 # Basic corrections
 # -----------------------
@@ -953,7 +953,7 @@ if run:
         df["Easting"] = E
         df["Northing"] = N
         
-        Gmap, D = compute_drift(df, G_base)
+        Gmap, D = compute_drift(df, G_base, debug_mode)
         df["G_read (mGal)"] = df["Nama"].map(Gmap)
         
         df["Koreksi Lintang"] = latitude_correction(df["Lat"])
@@ -1160,3 +1160,4 @@ if run:
                 )
         
         st.info("✅ Processing complete! Download your results above.")
+
