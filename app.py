@@ -238,83 +238,12 @@ def latitude_correction(lat):
 def free_air(elev):
     return 0.3086 * elev
 
-# -----------------------
-# Hammer (unchanged)
-# -----------------------
-HAMMER_R = np.array([2, 6, 18, 54, 162, 486, 1458, 4374])
-HAMMER_F = np.array([0.00027, 0.00019, 0.00013, 0.00009, 0.00006, 0.00004, 0.000025, 0.000015])
-
-def hammer_tc(e0, n0, z0, dem_df):
-    dx = dem_df["Easting"].to_numpy() - float(e0)
-    dy = dem_df["Northing"].to_numpy() - float(n0)
-    dist = np.sqrt(dx*dx + dy*dy)
-    z = dem_df["Elev"].to_numpy()
-    
-    tc = 0.0; inner = 0.0
-    for i, outer in enumerate(HAMMER_R):
-        mask = (dist >= inner) & (dist < outer)
-        if mask.sum() > 0:
-            dh = z[mask].mean() - float(z0)
-            tc += HAMMER_F[i] * dh
-        inner = outer
-    return float(tc)
-
-def simple_nagy_prism(e0, n0, z0, dem_df, density, max_radius):
-    """
-    Implementasi sederhana Nagy prism untuk referensi.
-    HANYA untuk perbandingan, bukan implementasi lengkap.
-    """
-    import numpy as np
-    
-    if dem_df is None or len(dem_df) == 0:
-        return 0.0
-    
-    # Pilih titik dalam radius
-    dx = dem_df['Easting'].to_numpy() - e0
-    dy = dem_df['Northing'].to_numpy() - n0
-    r = np.sqrt(dx**2 + dy**2)
-    mask = r <= max_radius
-    
-    if not np.any(mask):
-        return 0.0
-    
-    # Data dalam radius
-    z_diff = dem_df['Elev'].to_numpy()[mask] - z0
-    r_vals = r[mask]
-    
-    # Pendekatan sederhana: g ~ G * ρ * ΔV * z / r^3
-    G = 6.67430e-11
-    # Asumsikan setiap titik mewakili area grid
-    # Coba infer grid spacing dari data
-    unique_x = np.unique(dem_df['Easting'].to_numpy())
-    unique_y = np.unique(dem_df['Northing'].to_numpy())
-    
-    if len(unique_x) > 1 and len(unique_y) > 1:
-        dx_grid = np.median(np.diff(np.sort(unique_x)))
-        dy_grid = np.median(np.diff(np.sort(unique_y)))
-        cell_area = dx_grid * dy_grid
-    else:
-        cell_area = 30 * 30  # Default 30x30 m jika tidak bisa diinfer
-    
-    # Hitung efek prism sederhana
-    volumes = cell_area * np.abs(z_diff)
-    
-    # Avoid division by zero
-    with np.errstate(divide='ignore', invalid='ignore'):
-        g_si = G * density * np.sum(volumes * z_diff / (r_vals**3 + 1e-10))
-    
-    # Convert to mGal
-    g_mgal = g_si * 1e5
-    
-    return float(g_mgal)
-
 # ============================================================
 # KONSTANTA & KERNEL DASAR SESUAI PAPER
 # ============================================================
 G = 6.67430e-11           # m^3 kg^-1 s^-2
 RHO = 2670.0              # kg/m^3 (2.67 g/cm^3)
 NANO_TO_MGAL = 1e-6       # 1 nGal = 1e-6 mGal
-MICRO_TO_MGAL = 1e-3      # 1 μGal = 1e-3 mGal
 
 def terrain_effect_cylindrical_sector(R1, R2, theta1, theta2, z, density):
     """
@@ -373,7 +302,7 @@ def optimized_elevation(z_avg, deviations, R1, R2, Delta_theta, r_points):
 # ============================================================
 # FUNGSI VALIDASI
 # ============================================================
-def validate_tc_value(tc_value, station_name, method, debug=False):
+def validate_tc_value(tc_value, station_name, debug=False):
     """Validasi nilai TC yang reasonable"""
     validated_tc = tc_value
     
@@ -396,66 +325,50 @@ def validate_tc_value(tc_value, station_name, method, debug=False):
     
     return validated_tc
 
-def validate_data(dem_df, station_df):
-    """Validasi konsistensi data sebelum perhitungan OSS"""
+def plot_dem_elevation(dem_df, stations_df=None):
+    """
+    Plot elevation dari DEM dengan overlay stasiun
+    """
+    # Interpolasi DEM untuk plotting smooth
+    x_dem = dem_df["Easting"]
+    y_dem = dem_df["Northing"]
+    z_dem = dem_df["Elev"]
     
-    st.subheader("Data Validation")
+    # Buat grid untuk contour
+    xi = np.linspace(x_dem.min(), x_dem.max(), 200)
+    yi = np.linspace(y_dem.min(), y_dem.max(), 200)
+    XI, YI = np.meshgrid(xi, yi)
     
-    # 1. Cek range elevasi
-    col1, col2 = st.columns(2)
-    with col1:
-        st.write("**DEM Statistics**")
-        st.write(f"- Points: {len(dem_df):,}")
-        st.write(f"- Elev min: {dem_df['Elev'].min():.1f} m")
-        st.write(f"- Elev max: {dem_df['Elev'].max():.1f} m")
-        st.write(f"- Elev mean: {dem_df['Elev'].mean():.1f} m")
+    # Interpolasi
+    ZI = griddata((x_dem, y_dem), z_dem, (XI, YI), method='cubic')
     
-    with col2:
-        st.write("**Station Statistics**")
-        st.write(f"- Stations: {len(station_df)}")
-        st.write(f"- Elev min: {station_df['Elev'].min():.1f} m")
-        st.write(f"- Elev max: {station_df['Elev'].max():.1f} m")
+    # Plot
+    fig, ax = plt.subplots(figsize=(10, 8))
     
-    # 2. Cek apakah stasiun dalam range DEM
-    dem_bounds = {
-        'E_min': dem_df['Easting'].min(),
-        'E_max': dem_df['Easting'].max(),
-        'N_min': dem_df['Northing'].min(),
-        'N_max': dem_df['Northing'].max()
-    }
+    # Contour plot dari DEM
+    contour = ax.contourf(XI, YI, ZI, 40, cmap='terrain', alpha=0.8)
     
-    stations_outside = station_df[
-        (station_df['Easting'] < dem_bounds['E_min']) |
-        (station_df['Easting'] > dem_bounds['E_max']) |
-        (station_df['Northing'] < dem_bounds['N_min']) |
-        (station_df['Northing'] > dem_bounds['N_max'])
-    ]
+    # Overlay stasiun jika ada
+    if stations_df is not None:
+        ax.scatter(stations_df['Easting'], stations_df['Northing'], 
+                  c='red', s=50, marker='^', edgecolor='black',
+                  label='Gravity Stations', zorder=5)
     
-    if len(stations_outside) > 0:
-        st.error(f"{len(stations_outside)} stasiun di luar area DEM!")
-        st.dataframe(stations_outside[['Nama', 'Easting', 'Northing', 'Elev']])
+    ax.set_xlabel('Easting (m)')
+    ax.set_ylabel('Northing (m)')
+    ax.set_title('Topography from DEM with Gravity Stations')
     
-    # 3. Plot distribusi
-    fig, axes = plt.subplots(1, 2, figsize=(12, 5))
+    # Colorbar
+    cbar = fig.colorbar(contour, ax=ax)
+    cbar.set_label('Elevation (m)')
     
-    axes[0].hist(dem_df['Elev'], bins=50, alpha=0.7, label='DEM')
-    axes[0].hist(station_df['Elev'], bins=20, alpha=0.7, label='Stations')
-    axes[0].set_xlabel('Elevation (m)')
-    axes[0].set_ylabel('Frequency')
-    axes[0].legend()
-    axes[0].set_title('Elevation Distribution')
+    if stations_df is not None:
+        ax.legend()
     
-    axes[1].scatter(dem_df['Easting'], dem_df['Northing'], 
-                   c=dem_df['Elev'], s=1, alpha=0.5, cmap='terrain')
-    axes[1].scatter(station_df['Easting'], station_df['Northing'], 
-                   c='red', s=20, marker='^', label='Stations')
-    axes[1].set_xlabel('Easting')
-    axes[1].set_ylabel('Northing')
-    axes[1].legend()
-    axes[1].set_title('Spatial Distribution')
-    
+    ax.grid(True, alpha=0.3)
     plt.tight_layout()
-    st.pyplot(fig)
+    
+    return fig
 
 # ============================================================
 # CLASS OSSTerrainCorrector YANG DIPERBAIKI
@@ -482,7 +395,6 @@ class OSSTerrainCorrector:
             self.params.update(params)
         
         # FIX KRITIS: Sesuai paper, z = station_height - average_topographic_height
-        # Jadi jika station lebih tinggi dari terrain, z positif
         dx = self.dem_df['Easting'] - self.e0
         dy = self.dem_df['Northing'] - self.n0
         
@@ -776,45 +688,54 @@ st.markdown(
 st.sidebar.header("Input Files")
 grav = st.sidebar.file_uploader("Input Gravity Multi-Sheets (.xlsx)", type=["xlsx"])
 demf = st.sidebar.file_uploader("Upload DEM (CSV/XYZ/TIFF)", type=["csv","txt","xyz","tif","tiff"])
-kmf = st.sidebar.file_uploader("Koreksi Medan manual (optional jika punya)", type=["csv","xlsx"])
+kmf = st.sidebar.file_uploader("Koreksi Medan manual (optional)", type=["csv","xlsx"])
 G_base = st.sidebar.number_input("G Absolute di Base", value=0.0)
 
 # ============================================================
-# TAMBAHAN: DEBUG MODE DAN PARAMETER OSS
+# PARAMETER OSS
 # ============================================================
 debug_mode = st.sidebar.checkbox("🛠️ Debug Mode", value=False)
 
-with st.sidebar.expander("OSS Algorithm Parameters", expanded=debug_mode):
-    threshold_mgal = st.slider(
-        "Threshold (mGal) for subdivision",
-        min_value=0.01,
-        max_value=0.2,
-        value=0.1,  # DIKURANGI dari 1.0 ke 0.1
-        step=0.01,
-        help="Nilai lebih kecil = lebih banyak subdivision, lebih akurat"
-    )
-    
-    use_optimized_elev = st.checkbox(
-        "Use optimized elevation (z')", 
-        value=True,
-        help="Menggunakan persamaan (8) untuk optimasi z'"
-    )
-    
-    min_points_sector = st.number_input(
-        "Minimum points per sector",
-        min_value=1,
-        max_value=100,
-        value=10,
-        help="Sector dengan points < ini tidak di-subdivide"
-    )
+st.sidebar.subheader("OSS Algorithm Parameters")
+threshold_mgal = st.sidebar.slider(
+    "Threshold (mGal) for subdivision",
+    min_value=0.01,
+    max_value=0.2,
+    value=0.1,
+    step=0.01,
+    help="Nilai lebih kecil = lebih banyak subdivision, lebih akurat"
+)
 
-method_options = ["OSS (Algorithm from Paper)", "HAMMER (Legacy)", "NAGY Prism (Reference)"]
-method = st.sidebar.selectbox("Metode Pengukuran Terrain", method_options)
-density = st.sidebar.number_input("Densitas Koreksi Medan (kg/m³)", value=2670.0, step=10.0, format="%.1f")
-max_radius = st.sidebar.number_input("Jarak Maksimum (m) untuk Nagy", value=10000, step=1000)
-z_ref = st.sidebar.number_input("z_ref (bottom prism reference, m)", value=0.0)
-run = st.sidebar.button("Run")
-st.sidebar.write("Notes: densitas biasanya 2670 kg/m³; adjust naik jarak radius untuk mendapatkan pengukuran medan yang jauh (biasanya 5-10 km)")
+max_radius = st.sidebar.number_input(
+    "Maximum Radius (m)",
+    value=4500,
+    step=500,
+    help="Jangkauan maksimum untuk koreksi medan"
+)
+
+density = st.sidebar.number_input(
+    "Densitas Batuan (kg/m³)",
+    value=2670.0,
+    step=10.0,
+    format="%.1f",
+    help="Densitas untuk perhitungan terrain correction"
+)
+
+use_optimized_elev = st.sidebar.checkbox(
+    "Use optimized elevation (z')", 
+    value=True,
+    help="Menggunakan persamaan (8) untuk optimasi z'"
+)
+
+min_points_sector = st.sidebar.number_input(
+    "Minimum points per sector",
+    min_value=1,
+    max_value=100,
+    value=10,
+    help="Sector dengan points < ini tidak di-subdivide"
+)
+
+run = st.sidebar.button("Run Processing", type="primary")
 
 st.sidebar.subheader("Contoh File Input")
 st.sidebar.write("[Contoh Data Input Gravity](https://github.com/dzakyw/AutoGrav/raw/9bb43e1559c823350f2371360309d84eaab5ea38/sample_gravity.xlsx)")
@@ -822,13 +743,9 @@ st.sidebar.write("[Contoh DEM dengan format .txt](https://github.com/dzakyw/Auto
 st.sidebar.write("[Contoh Koreksi Medan](https://github.com/dzakyw/AutoGrav/raw/9bb43e1559c823350f2371360309d84eaab5ea38/sample_koreksi_medan.csv)")
 
 # ============================================================
-# MAIN PROCESSING
+# MAIN PROCESSING - HANYA OSS
 # ============================================================
 if run:
-    if method.startswith("NAGY") and (density is None or density <= 0.0):
-        st.error("Untuk metode NAGY, isi density > 0 (kg/m³). Mis. 2670.")
-        st.stop()
-    
     if grav is None:
         st.error("Upload file gravity .xlsx (multi-sheet).")
         st.stop()
@@ -838,34 +755,24 @@ if run:
         try:
             dem = load_dem(demf)
             st.success(f"✅ DEM loaded: {len(dem):,} points.")
+            
+            # Tampilkan info DEM
+            col1, col2 = st.columns(2)
+            with col1:
+                st.info(f"**DEM Statistics:**")
+                st.write(f"- Points: {len(dem):,}")
+                st.write(f"- Elevation range: {dem['Elev'].min():.1f} to {dem['Elev'].max():.1f} m")
+                st.write(f"- Mean elevation: {dem['Elev'].mean():.1f} m")
+            
+            with col2:
+                st.info(f"**Spatial Coverage:**")
+                st.write(f"- Easting: {dem['Easting'].min():.0f} to {dem['Easting'].max():.0f} m")
+                st.write(f"- Northing: {dem['Northing'].min():.0f} to {dem['Northing'].max():.0f} m")
+                st.write(f"- Area: {(dem['Easting'].max()-dem['Easting'].min())/1000:.1f} × {(dem['Northing'].max()-dem['Northing'].min())/1000:.1f} km")
+        
         except Exception as e:
             st.error(f"DEM load failed: {e}")
             st.stop()
-    
-    # Validasi data jika debug mode
-    if dem is not None and debug_mode:
-        st.subheader("Data Validation")
-        try:
-            xls = pd.ExcelFile(grav)
-            df_sample = pd.read_excel(grav, sheet_name=xls.sheet_names[0])
-            
-            # Konversi koordinat
-            E, N, _, _ = latlon_to_utm_redfearn(df_sample["Lat"].to_numpy(), df_sample["Lon"].to_numpy())
-            df_sample["Easting"] = E
-            df_sample["Northing"] = N
-            
-            # Tampilkan validasi sederhana
-            col1, col2 = st.columns(2)
-            with col1:
-                st.write("**DEM Stats:**")
-                st.write(f"- Points: {len(dem):,}")
-                st.write(f"- Elev: {dem['Elev'].min():.1f} to {dem['Elev'].max():.1f} m")
-            with col2:
-                st.write("**Station Stats:**")
-                st.write(f"- Stations: {len(df_sample)}")
-                st.write(f"- Elev: {df_sample['Elev'].min():.1f} to {df_sample['Elev'].max():.1f} m")
-        except:
-            pass
     
     # load manual koreksi jika ada
     km_map = None
@@ -877,6 +784,7 @@ if run:
         if {"Nama","Koreksi_Medan"}.issubset(km.columns):
             km["Koreksi_Medan"] = pd.to_numeric(km["Koreksi_Medan"], errors="coerce")
             km_map = km.set_index("Nama")["Koreksi_Medan"].to_dict()
+            st.info(f"✅ Manual terrain correction loaded: {len(km_map)} stations")
         else:
             st.warning("File koreksi medan manual harus kolom: Nama, Koreksi_Medan. Ignored.")
     
@@ -896,14 +804,37 @@ if run:
     
     # Container untuk statistics
     tc_stats = []
+    station_details = []
     
-    for sh in xls.sheet_names:
+    # Parameter OSS
+    oss_params = {
+        'max_radius': max_radius,
+        'tolerance_nGal': 1.0,
+        'threshold_mGal': threshold_mgal,
+        'theta_step': 1.0,
+        'r_step_near': 10.0,
+        'r_step_far': 50.0,
+        'min_points_per_sector': min_points_sector,
+        'use_optimized_elevation': use_optimized_elev,
+        'debug': debug_mode
+    }
+    
+    st.info(f"**OSS Parameters:** Max radius = {max_radius} m, Threshold = {threshold_mgal} mGal, Density = {density} kg/m³")
+    
+    total_sheets = len(xls.sheet_names)
+    sheet_progress_bar = st.progress(0)
+    
+    for sheet_idx, sh in enumerate(xls.sheet_names):
         df = pd.read_excel(grav, sheet_name=sh)
         required = {"Nama","Time","G_read (mGal)","Lat","Lon","Elev"}
         
         if not required.issubset(set(df.columns)):
             st.warning(f"Sheet {sh} dilewati (kolom tidak lengkap).")
             continue
+        
+        # Update progress
+        sheet_progress = (sheet_idx + 1) / total_sheets
+        sheet_progress_bar.progress(sheet_progress)
         
         # UTM conversion for stations
         E, N, _, _ = latlon_to_utm_redfearn(df["Lat"].to_numpy(), df["Lon"].to_numpy())
@@ -920,23 +851,10 @@ if run:
         df["FAA"] = df["G_read (mGal)"] - df["Koreksi Lintang"] + df["Free Air Correction"]
         
         # ============================================================
-        # TERRAIN CORRECTION DENGAN VALIDASI
+        # TERRAIN CORRECTION - HANYA OSS
         # ============================================================
         tc_list = []
         nstations = len(df)
-        
-        # Parameter OSS yang sudah dioptimasi
-        oss_params = {
-            'max_radius': max_radius,
-            'tolerance_nGal': 1.0,
-            'threshold_mGal': threshold_mgal,  # PAKAI VALUE DARI SLIDER
-            'theta_step': 1.0,
-            'r_step_near': 10.0,
-            'r_step_far': 50.0,
-            'min_points_per_sector': min_points_sector,
-            'use_optimized_elevation': use_optimized_elev,
-            'debug': debug_mode
-        }
         
         progress_bar = st.progress(0)
         status_text = st.empty()
@@ -950,44 +868,38 @@ if run:
             progress_bar.progress(progress)
             status_text.text(f"Sheet {sh}: Station {i+1}/{nstations} ({station_name})")
             
-            if method == "OSS (Algorithm from Paper)":
-                if dem is not None:
-                    tc_val = calculate_oss_correction(dem, station_data, oss_params)
-                    
-                    # VALIDASI TC VALUE
-                    tc_val = validate_tc_value(tc_val, station_name, method, debug_mode)
-                    
-                    # Bandingkan dengan Hammer jika debug
-                    if debug_mode:
-                        e0 = float(station_data["Easting"])
-                        n0 = float(station_data["Northing"])
-                        z0 = float(station_data["Elev"])
-                        tc_hammer = hammer_tc(e0, n0, z0, dem)
-                        st.write(f"{station_name}: OSS={tc_val:.3f} mGal, Hammer={tc_hammer:.3f} mGal")
-                    
-                    tc_stats.append(tc_val)
-                else:
-                    st.error("DEM diperlukan untuk metode OSS.")
-                    tc_val = 0.0
+            # Gunakan koreksi manual jika tersedia
+            if km_map is not None and station_name in km_map:
+                tc_val = km_map[station_name]
+                if debug_mode:
+                    st.write(f"{station_name}: Using manual TC = {tc_val:.3f} mGal")
             
-            elif method == "HAMMER (Legacy)":
-                e0 = float(station_data["Easting"])
-                n0 = float(station_data["Northing"])
-                z0 = float(station_data["Elev"])
-                tc_val = hammer_tc(e0, n0, z0, dem) if dem is not None else 0.0
-                tc_stats.append(tc_val)
+            # Hitung dengan OSS jika ada DEM
+            elif dem is not None:
+                tc_val = calculate_oss_correction(dem, station_data, oss_params)
+                
+                # VALIDASI TC VALUE
+                tc_val = validate_tc_value(tc_val, station_name, debug_mode)
+                
+                if debug_mode:
+                    st.write(f"{station_name}: OSS TC = {tc_val:.3f} mGal")
+            else:
+                tc_val = 0.0
+                if debug_mode:
+                    st.write(f"{station_name}: No DEM or manual TC available, using 0.0 mGal")
             
-            elif method == "NAGY Prism (Reference)":
-                e0 = float(station_data["Easting"])
-                n0 = float(station_data["Northing"])
-                z0 = float(station_data["Elev"])
-                if dem is not None:
-                    tc_val = simple_nagy_prism(e0, n0, z0, dem, density, max_radius)
-                    tc_val = validate_tc_value(tc_val, station_name, method, debug_mode)
-                    tc_stats.append(tc_val)
-                else:
-                    tc_val = 0.0
+            # Simpan detail
+            station_details.append({
+                'Sheet': sh,
+                'Station': station_name,
+                'Easting': station_data['Easting'],
+                'Northing': station_data['Northing'],
+                'Elevation': station_data['Elev'],
+                'TC_OSS': tc_val,
+                'Source': 'Manual' if (km_map is not None and station_name in km_map) else 'OSS'
+            })
             
+            tc_stats.append(tc_val)
             tc_list.append(tc_val)
         
         progress_bar.empty()
@@ -996,10 +908,17 @@ if run:
         # Tampilkan statistik TC untuk sheet ini jika debug
         if debug_mode and tc_list:
             tc_array = np.array(tc_list)
-            st.write(f"**Sheet {sh} TC Stats:**")
-            st.write(f"Mean: {tc_array.mean():.3f} mGal, Min: {tc_array.min():.3f} mGal, Max: {tc_array.max():.3f} mGal")
-            if tc_array.max() - tc_array.min() > 10:
-                st.warning("⚠️ Wide range of TC values in this sheet!")
+            with st.expander(f"TC Statistics for Sheet {sh}"):
+                col1, col2, col3 = st.columns(3)
+                with col1:
+                    st.metric("Mean", f"{tc_array.mean():.3f} mGal")
+                with col2:
+                    st.metric("Min", f"{tc_array.min():.3f} mGal")
+                with col3:
+                    st.metric("Max", f"{tc_array.max():.3f} mGal")
+                
+                if tc_array.max() - tc_array.min() > 10:
+                    st.warning("⚠️ Wide range of TC values in this sheet!")
         
         df["Koreksi Medan"] = tc_list
         df["X-Parasnis"] = 0.04192 * df["Elev"] - df["Koreksi Medan"]
@@ -1007,6 +926,8 @@ if run:
         df["Hari"] = sh
         
         all_dfs.append(df)
+    
+    sheet_progress_bar.empty()
     
     if len(all_dfs) == 0:
         st.error("No valid sheets processed.")
@@ -1022,16 +943,26 @@ if run:
     
     if tc_stats:
         tc_values = np.array(tc_stats)
-        st.write(f"**Overall TC Statistics ({method}):**")
+        st.subheader("📊 Terrain Correction Statistics")
+        
         col1, col2, col3, col4 = st.columns(4)
         with col1:
             st.metric("Mean TC", f"{tc_values.mean():.3f} mGal")
         with col2:
-            st.metric("Min TC", f"{tc_values.min():.3f} mGal")
+            st.metric("Median TC", f"{np.median(tc_values):.3f} mGal")
         with col3:
-            st.metric("Max TC", f"{tc_values.max():.3f} mGal")
+            st.metric("Min TC", f"{tc_values.min():.3f} mGal")
         with col4:
-            st.metric("Std Dev", f"{tc_values.std():.3f} mGal")
+            st.metric("Max TC", f"{tc_values.max():.3f} mGal")
+        
+        # Histogram TC values
+        fig_hist, ax_hist = plt.subplots(figsize=(10, 4))
+        ax_hist.hist(tc_values, bins=30, alpha=0.7, edgecolor='black')
+        ax_hist.set_xlabel('Terrain Correction (mGal)')
+        ax_hist.set_ylabel('Frequency')
+        ax_hist.set_title('Distribution of Terrain Correction Values')
+        ax_hist.grid(True, alpha=0.3)
+        st.pyplot(fig_hist)
         
         # Warning jika range terlalu besar
         if tc_values.max() - tc_values.min() > 15:
@@ -1053,60 +984,124 @@ if run:
             st.warning("Low R² value in Parasnis regression! Check TC calculations.")
     else:
         slope = np.nan
+        st.warning("Not enough data for Parasnis regression.")
     
     df_all["Bouger Correction"] = 0.04192 * slope * df_all["Elev"]
     df_all["Simple Bouger Anomaly"] = df_all["FAA"] - df_all["Bouger Correction"]
-    df_all["Complete Bouger Correction"] = df_all["Simple Bouger Anomaly"] + df_all["Koreksi Medan"]
+    df_all["Complete Bouger Anomaly"] = df_all["Simple Bouger Anomaly"] + df_all["Koreksi Medan"]
     
-    st.success("Done")
-    st.dataframe(df_all.head(20))
+    # ============================================================
+    # TAMPILKAN HASIL
+    # ============================================================
+    st.subheader("📋 Processed Results")
     
-    # contour plots
-    st.subheader("Plot Parasnis X–Y")
-    
-    mask = df_all[["X-Parasnis", "Y-Parasnis"]].notnull().all(axis=1)
-    df_parasnis = df_all.loc[mask].copy()
-    
-    if len(df_parasnis) < 2:
-        st.warning("Data tidak cukup untuk regresi Parasnis.")
-    else:
-        X = df_parasnis["X-Parasnis"].values
-        Y = df_parasnis["Y-Parasnis"].values
+    # Tampilkan preview data
+    with st.expander("View Data Preview", expanded=True):
+        st.dataframe(df_all.head(20))
         
-        slope, intercept = np.polyfit(X, Y, 1)
-        X_line = np.linspace(min(X), max(X), 100)
-        Y_line = slope * X_line + intercept
-        
-        fig, ax = plt.subplots(figsize=(8, 6))
-        ax.scatter(X, Y, s=25, color="blue", label="Data Parasnis", alpha=0.7)
-        ax.plot(X_line, Y_line, color="red", linewidth=2,
-                label=f"Regresi: Y = {slope:.5f} X + {intercept:.5f}")
-        ax.set_xlabel("X-Parasnis (mGal)")
-        ax.set_ylabel("Y-Parasnis (mGal)")
-        ax.set_title("Diagram Parasnis (X vs Y)")
-        ax.grid(True, linestyle="--", alpha=0.5)
-        ax.legend()
-        st.pyplot(fig)
-        st.success(f"Slope (K) = {slope:.5f}")
+        # Summary stats
+        st.write(f"**Total rows processed:** {len(df_all)}")
+        st.write(f"**Total sheets processed:** {len(all_dfs)}")
     
-    x = df_all["Easting"]; y = df_all["Northing"]
-    gx = np.linspace(x.min(), x.max(), 200); gy = np.linspace(y.min(), y.max(), 200)
-    GX, GY = np.meshgrid(gx, gy)
+    # ============================================================
+    # PLOTTING
+    # ============================================================
+    st.subheader("📈 Visualization")
     
+    # Plot Parasnis
+    tab1, tab2, tab3, tab4 = st.tabs(["Parasnis Plot", "Topography", "CBA Map", "SBA Map"])
+    
+    with tab1:
+        if mask.sum() >= 2:
+            X = df_all.loc[mask, "X-Parasnis"].values
+            Y = df_all.loc[mask, "Y-Parasnis"].values
+            
+            fig_parasnis, ax_parasnis = plt.subplots(figsize=(8, 6))
+            ax_parasnis.scatter(X, Y, s=25, color="blue", label="Data Parasnis", alpha=0.7)
+            
+            # Regression line
+            X_line = np.linspace(min(X), max(X), 100)
+            Y_line = slope * X_line + intercept
+            ax_parasnis.plot(X_line, Y_line, color="red", linewidth=2,
+                          label=f"Regresi: Y = {slope:.5f} X + {intercept:.5f}")
+            
+            ax_parasnis.set_xlabel("X-Parasnis (mGal)")
+            ax_parasnis.set_ylabel("Y-Parasnis (mGal)")
+            ax_parasnis.set_title("Diagram Parasnis (X vs Y)")
+            ax_parasnis.grid(True, linestyle="--", alpha=0.5)
+            ax_parasnis.legend()
+            st.pyplot(fig_parasnis)
+            
+            col1, col2 = st.columns(2)
+            with col1:
+                st.success(f"**Slope (K):** {slope:.5f}")
+            with col2:
+                st.info(f"**R-squared:** {r_squared:.3f}")
+        else:
+            st.warning("Not enough data for Parasnis plot.")
+    
+    with tab2:
+        if dem is not None:
+            # Plot topography dari DEM
+            fig_topo = plot_dem_elevation(dem, df_all)
+            st.pyplot(fig_topo)
+            st.caption("Topography from DEM with gravity station locations (red triangles)")
+        else:
+            # Fallback ke plotting dari stasiun
+            st.info("No DEM available for topography plot. Showing station elevations only.")
+            plot_cont(df_all["Elev"], "Station Elevations (from gravity data)")
+    
+    with tab3:
+        # Complete Bouguer Anomaly Map
+        plot_cont(df_all["Complete Bouger Anomaly"], "Complete Bouguer Anomaly")
+    
+    with tab4:
+        # Simple Bouguer Anomaly Map
+        plot_cont(df_all["Simple Bouger Anomaly"], "Simple Bouguer Anomaly")
+    
+    # Helper function untuk plotting contour
     def plot_cont(z, title):
-        Z = griddata((x,y), z, (GX,GY), method="cubic")
-        fig, ax = plt.subplots(figsize=(8,6))
+        x = df_all["Easting"]
+        y = df_all["Northing"]
+        gx = np.linspace(x.min(), x.max(), 200)
+        gy = np.linspace(y.min(), y.max(), 200)
+        GX, GY = np.meshgrid(gx, gy)
+        
+        Z = griddata((x, y), z, (GX, GY), method="cubic")
+        fig, ax = plt.subplots(figsize=(8, 6))
         cf = ax.contourf(GX, GY, Z, 40, cmap="jet")
         ax.scatter(x, y, c=z, cmap="jet", s=12, edgecolor="k")
         ax.set_title(title)
         fig.colorbar(cf, ax=ax)
         st.pyplot(fig)
     
-    plot_cont(df_all["Complete Bouger Correction"], "CBA")
-    plot_cont(df_all["Simple Bouger Anomaly"], "SBA")
-    plot_cont(df_all["Elev"], "Elevation")
+    # ============================================================
+    # DOWNLOAD OPTIONS
+    # ============================================================
+    st.subheader("💾 Download Results")
     
-    # download
-    st.download_button("Download CSV", df_all.to_csv(index=False).encode("utf-8"),
-                      "Hasil Perhitungan.csv")
-
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        # Download main results
+        csv = df_all.to_csv(index=False)
+        st.download_button(
+            label="Download Processed Data (.csv)",
+            data=csv.encode('utf-8'),
+            file_name="autograv_results.csv",
+            mime="text/csv"
+        )
+    
+    with col2:
+        # Download station details
+        if station_details:
+            details_df = pd.DataFrame(station_details)
+            details_csv = details_df.to_csv(index=False)
+            st.download_button(
+                label="Download Station Details (.csv)",
+                data=details_csv.encode('utf-8'),
+                file_name="autograv_station_details.csv",
+                mime="text/csv"
+            )
+    
+    st.info("✅ Processing complete! Use the download buttons above to save your results.")
