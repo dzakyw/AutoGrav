@@ -9,15 +9,53 @@ from PIL import Image
 import os
 import hashlib
 
-# Coba import cartopy, jika tidak ada beri warning
+# Tambahkan di bagian import
 try:
-    import cartopy.crs as ccrs
-    import cartopy.feature as cfeature
-    CARTOPY_AVAILABLE = True
+    import folium
+    from folium.plugins import HeatMap
+    FOLIUM_AVAILABLE = True
 except ImportError:
-    CARTOPY_AVAILABLE = False
-    st.warning("Cartopy tidak terinstall. Plot dengan peta tidak akan tersedia.")
+    FOLIUM_AVAILABLE = False
 
+# Fungsi untuk plot dengan Folium
+def plot_with_folium(df, value_col, title):
+    """Plot interaktif dengan Folium"""
+    # Buat peta centered di mean coordinates
+    center_lat = df['Lat'].mean()
+    center_lon = df['Lon'].mean()
+    
+    m = folium.Map(location=[center_lat, center_lon], 
+                   zoom_start=8, 
+                   tiles='OpenStreetMap')
+    
+    # Tambahkan markers
+    for idx, row in df.iterrows():
+        popup_text = f"""
+        <b>Station:</b> {row['Nama']}<br>
+        <b>Lat:</b> {row['Lat']:.4f}°<br>
+        <b>Lon:</b> {row['Lon']:.4f}°<br>
+        <b>{value_col}:</b> {row[value_col]:.2f}
+        """
+        
+        # Color based on value
+        norm_value = (row[value_col] - df[value_col].min()) / (df[value_col].max() - df[value_col].min())
+        color = plt.cm.viridis(norm_value)
+        hex_color = '#%02x%02x%02x' % (int(color[0]*255), int(color[1]*255), int(color[2]*255))
+        
+        folium.CircleMarker(
+            location=[row['Lat'], row['Lon']],
+            radius=8,
+            popup=folium.Popup(popup_text, max_width=300),
+            color=hex_color,
+            fill=True,
+            fill_color=hex_color
+        ).add_to(m)
+    
+    # Tambahkan heatmap layer
+    heat_data = [[row['Lat'], row['Lon'], row[value_col]] for idx, row in df.iterrows()]
+    HeatMap(heat_data, radius=15, blur=10, max_zoom=1).add_to(m)
+    
+    return m
 # ---------------------------------------------
 # 1. HASH FUNCTION
 # ---------------------------------------------
@@ -1399,3 +1437,4 @@ if run:
             )
     
     st.info("✅ Processing complete! Use the download buttons above to save your results.")
+
