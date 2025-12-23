@@ -9,53 +9,26 @@ from PIL import Image
 import os
 import hashlib
 
-# Tambahkan di bagian import
+# ============================================================
+# IMPORT UNTUK PLOT INTERAKTIF - GANTI CARTOPY DENGAN PLOTLY
+# ============================================================
+try:
+    import plotly.graph_objects as go
+    import plotly.express as px
+    from plotly.subplots import make_subplots
+    PLOTLY_AVAILABLE = True
+except ImportError:
+    PLOTLY_AVAILABLE = False
+    st.warning("Plotly tidak terinstall. Interactive plots tidak akan tersedia.")
+
+# Jika ingin mencoba Folium untuk peta interaktif:
 try:
     import folium
-    from folium.plugins import HeatMap
+    from folium.plugins import MarkerCluster, HeatMap
     FOLIUM_AVAILABLE = True
 except ImportError:
     FOLIUM_AVAILABLE = False
-
-# Fungsi untuk plot dengan Folium
-def plot_with_folium(df, value_col, title):
-    """Plot interaktif dengan Folium"""
-    # Buat peta centered di mean coordinates
-    center_lat = df['Lat'].mean()
-    center_lon = df['Lon'].mean()
-    
-    m = folium.Map(location=[center_lat, center_lon], 
-                   zoom_start=8, 
-                   tiles='OpenStreetMap')
-    
-    # Tambahkan markers
-    for idx, row in df.iterrows():
-        popup_text = f"""
-        <b>Station:</b> {row['Nama']}<br>
-        <b>Lat:</b> {row['Lat']:.4f}°<br>
-        <b>Lon:</b> {row['Lon']:.4f}°<br>
-        <b>{value_col}:</b> {row[value_col]:.2f}
-        """
-        
-        # Color based on value
-        norm_value = (row[value_col] - df[value_col].min()) / (df[value_col].max() - df[value_col].min())
-        color = plt.cm.viridis(norm_value)
-        hex_color = '#%02x%02x%02x' % (int(color[0]*255), int(color[1]*255), int(color[2]*255))
-        
-        folium.CircleMarker(
-            location=[row['Lat'], row['Lon']],
-            radius=8,
-            popup=folium.Popup(popup_text, max_width=300),
-            color=hex_color,
-            fill=True,
-            fill_color=hex_color
-        ).add_to(m)
-    
-    # Tambahkan heatmap layer
-    heat_data = [[row['Lat'], row['Lon'], row[value_col]] for idx, row in df.iterrows()]
-    HeatMap(heat_data, radius=15, blur=10, max_zoom=1).add_to(m)
-    
-    return m
+   
 # ---------------------------------------------
 # 1. HASH FUNCTION
 # ---------------------------------------------
@@ -448,150 +421,189 @@ def plot_cont(x, y, z, title):
     return fig
 
 # ============================================================
-# FUNGSI PLOTTING DENGAN CARTOPY (PETA INDONESIA)
+# FUNGSI PLOTTING INTERAKTIF DENGAN PLOTLY
 # ============================================================
-def plot_with_cartopy(df, value_col, title, cmap='viridis'):
+def create_interactive_scatter(df, x_col, y_col, color_col, title, hover_cols=None):
     """
-    Plot data dengan peta Indonesia menggunakan Cartopy
-    
-    Parameters:
-    -----------
-    df : pandas.DataFrame
-        Data dengan kolom 'Lon', 'Lat', dan value_col
-    value_col : str
-        Nama kolom yang akan diplot
-    title : str
-        Judul plot
-    cmap : str
-        Colormap untuk plotting
+    Buat scatter plot interaktif dengan Plotly
     """
-    if not CARTOPY_AVAILABLE:
-        st.warning("Cartopy tidak tersedia. Install dengan: pip install cartopy")
+    if not PLOTLY_AVAILABLE:
         return None
     
-    try:
-        # Create figure dengan proyeksi PlateCarree
-        fig = plt.figure(figsize=(12, 10))
-        ax = plt.axes(projection=ccrs.PlateCarree())
-        
-        # Set extent untuk Indonesia (95°E - 141°E, 11°S - 6°N)
-        # Sesuaikan dengan data Anda
-        lon_min = max(df['Lon'].min() - 1, 95)
-        lon_max = min(df['Lon'].max() + 1, 141)
-        lat_min = max(df['Lat'].min() - 1, -11)
-        lat_max = min(df['Lat'].max() + 1, 6)
-        
-        ax.set_extent([lon_min, lon_max, lat_min, lat_max], crs=ccrs.PlateCarree())
-        
-        # Add features peta
-        ax.add_feature(cfeature.LAND, facecolor='lightgray', alpha=0.3)
-        ax.add_feature(cfeature.OCEAN, facecolor='lightblue', alpha=0.5)
-        ax.add_feature(cfeature.COASTLINE, linewidth=0.5)
-        ax.add_feature(cfeature.BORDERS, linestyle=':', linewidth=0.5)
-        ax.add_feature(cfeature.LAKES, alpha=0.5)
-        ax.add_feature(cfeature.RIVERS, linewidth=0.5)
-        
-        # Add gridlines
-        gl = ax.gridlines(draw_labels=True, linewidth=0.5, color='gray', alpha=0.5, linestyle='--')
-        gl.top_labels = False
-        gl.right_labels = False
-        gl.xlabel_style = {'size': 10}
-        gl.ylabel_style = {'size': 10}
-        
-        # Plot data points
-        scatter = ax.scatter(df['Lon'], df['Lat'], 
-                           c=df[value_col], 
-                           s=30, 
-                           cmap=cmap, 
-                           alpha=0.8,
-                           edgecolor='black',
-                           linewidth=0.5,
-                           transform=ccrs.PlateCarree(),
-                           zorder=5)
-        
-        # Add colorbar
-        cbar = plt.colorbar(scatter, ax=ax, orientation='vertical', pad=0.02, shrink=0.8)
-        cbar.set_label(value_col.replace('_', ' '), fontsize=12)
-        
-        # Add title
-        plt.title(title, fontsize=14, fontweight='bold', pad=20)
-        
-        # Add scale bar
-        ax.text(0.02, 0.02, f'Data points: {len(df)}', 
-               transform=ax.transAxes, fontsize=10,
-               bbox=dict(boxstyle="round,pad=0.3", facecolor="white", alpha=0.8))
-        
-        plt.tight_layout()
-        return fig
+    if hover_cols is None:
+        hover_cols = ['Nama', 'Elev', 'Lon', 'Lat']
     
-    except Exception as e:
-        st.error(f"Error creating Cartopy plot: {e}")
-        return None
+    # Pastikan kolom yang diperlukan ada
+    hover_data = {col: df[col] for col in hover_cols if col in df.columns}
+    
+    # Buat figure dengan Plotly
+    fig = px.scatter(
+        df,
+        x=x_col,
+        y=y_col,
+        color=color_col,
+        hover_data=hover_data,
+        title=title,
+        color_continuous_scale='viridis',
+        size_max=15
+    )
+    
+    # Update layout untuk lebih baik
+    fig.update_layout(
+        title=dict(text=title, font=dict(size=16)),
+        xaxis_title=x_col,
+        yaxis_title=y_col,
+        hovermode='closest',
+        showlegend=True
+    )
+    
+    # Tambahkan tooltips yang lebih informatif
+    fig.update_traces(
+        hovertemplate='<b>%{customdata[0]}</b><br>' +
+                     f'{x_col}: %{{x:.3f}}<br>' +
+                     f'{y_col}: %{{y:.3f}}<br>' +
+                     f'{color_col}: %{{marker.color:.2f}}<br>' +
+                     'Elev: %{customdata[1]:.1f} m<br>' +
+                     'Lon: %{customdata[2]:.4f}°<br>' +
+                     'Lat: %{customdata[3]:.4f}°<extra></extra>'
+    )
+    
+    return fig
 
-def plot_contour_with_cartopy(df, value_col, title, cmap='viridis', grid_resolution=100):
+def create_contour_interactive(df, x_col, y_col, z_col, title):
     """
-    Plot kontur dengan peta latar belakang Indonesia
+    Buat contour plot interaktif dengan Plotly
     """
-    if not CARTOPY_AVAILABLE:
-        st.warning("Cartopy tidak tersedia. Install dengan: pip install cartopy")
+    if not PLOTLY_AVAILABLE:
         return None
     
-    try:
-        # Buat grid untuk interpolasi
-        lon_grid = np.linspace(df['Lon'].min(), df['Lon'].max(), grid_resolution)
-        lat_grid = np.linspace(df['Lat'].min(), df['Lat'].max(), grid_resolution)
-        lon_mesh, lat_mesh = np.meshgrid(lon_grid, lat_grid)
-        
-        # Interpolasi data
-        values = griddata((df['Lon'], df['Lat']), df[value_col],
-                         (lon_mesh, lat_mesh), method='cubic')
-        
-        # Create figure
-        fig = plt.figure(figsize=(12, 10))
-        ax = plt.axes(projection=ccrs.PlateCarree())
-        
-        # Set extent
-        ax.set_extent([df['Lon'].min()-0.5, df['Lon'].max()+0.5,
-                      df['Lat'].min()-0.5, df['Lat'].max()+0.5],
-                     crs=ccrs.PlateCarree())
-        
-        # Add map features
-        ax.add_feature(cfeature.LAND, facecolor='lightgray', alpha=0.3)
-        ax.add_feature(cfeature.OCEAN, facecolor='lightblue', alpha=0.5)
-        ax.add_feature(cfeature.COASTLINE, linewidth=0.8)
-        ax.add_feature(cfeature.BORDERS, linestyle=':', linewidth=0.8)
-        
-        # Plot contour
-        contour = ax.contourf(lon_mesh, lat_mesh, values,
-                             levels=30, cmap=cmap, alpha=0.7,
-                             transform=ccrs.PlateCarree())
-        
-        # Plot data points
-        ax.scatter(df['Lon'], df['Lat'], 
-                  c='black', s=20, marker='o',
-                  alpha=0.7, transform=ccrs.PlateCarree(),
-                  edgecolor='white', linewidth=0.5)
-        
-        # Add gridlines
-        gl = ax.gridlines(draw_labels=True, linewidth=0.5, 
-                         color='gray', alpha=0.5, linestyle='--')
-        gl.top_labels = False
-        gl.right_labels = False
-        
-        # Add colorbar
-        cbar = plt.colorbar(contour, ax=ax, orientation='vertical', 
-                           pad=0.02, shrink=0.8)
-        cbar.set_label(value_col.replace('_', ' '), fontsize=12)
-        
-        plt.title(title, fontsize=14, fontweight='bold', pad=20)
-        plt.tight_layout()
-        
-        return fig
+    # Buat grid untuk interpolasi
+    xi = np.linspace(df[x_col].min(), df[x_col].max(), 100)
+    yi = np.linspace(df[y_col].min(), df[y_col].max(), 100)
+    xi_grid, yi_grid = np.meshgrid(xi, yi)
     
-    except Exception as e:
-        st.error(f"Error creating contour plot: {e}")
-        return None
+    # Interpolasi data
+    zi = griddata(
+        (df[x_col], df[y_col]), 
+        df[z_col], 
+        (xi_grid, yi_grid), 
+        method='cubic'
+    )
+    
+    # Buat contour plot
+    fig = go.Figure(data=
+        go.Contour(
+            z=zi,
+            x=xi,
+            y=yi,
+            colorscale='Viridis',
+            contours=dict(
+                coloring='heatmap',
+                showlabels=True,
+                labelfont=dict(size=12, color='white')
+            ),
+            colorbar=dict(
+                title=z_col,
+                titleside='right'
+            )
+        )
+    )
+    
+    # Tambahkan scatter points
+    fig.add_trace(
+        go.Scatter(
+            x=df[x_col],
+            y=df[y_col],
+            mode='markers',
+            marker=dict(
+                size=8,
+                color='red',
+                symbol='circle',
+                line=dict(width=1, color='black')
+            ),
+            name='Stations',
+            text=df['Nama'],
+            hovertemplate='<b>%{text}</b><br>' +
+                         f'{x_col}: %{{x:.3f}}<br>' +
+                         f'{y_col}: %{{y:.3f}}<br>' +
+                         f'{z_col}: %{{customdata:.2f}}<extra></extra>',
+            customdata=df[z_col]
+        )
+    )
+    
+    fig.update_layout(
+        title=dict(text=title, font=dict(size=16)),
+        xaxis_title=x_col,
+        yaxis_title=y_col,
+        showlegend=True
+    )
+    
+    return fig
 
+def create_folium_map(df, center_lat=None, center_lon=None, zoom_start=10):
+    """
+    Buat peta interaktif dengan Folium
+    """
+    if not FOLIUM_AVAILABLE or len(df) == 0:
+        return None
+    
+    # Tentukan center map
+    if center_lat is None:
+        center_lat = df['Lat'].mean()
+    if center_lon is None:
+        center_lon = df['Lon'].mean()
+    
+    # Buat peta
+    m = folium.Map(
+        location=[center_lat, center_lon],
+        zoom_start=zoom_start,
+        tiles='OpenStreetMap',
+        control_scale=True
+    )
+    
+    # Normalisasi nilai untuk color mapping
+    if 'Complete Bouger Anomaly' in df.columns:
+        value_col = 'Complete Bouger Anomaly'
+    elif 'Koreksi Medan' in df.columns:
+        value_col = 'Koreksi Medan'
+    else:
+        value_col = 'Elev'
+    
+    values = df[value_col]
+    norm_values = (values - values.min()) / (values.max() - values.min())
+    
+    # Tambahkan marker untuk setiap stasiun
+    for idx, row in df.iterrows():
+        # Tentukan warna berdasarkan nilai
+        color_int = int(255 * norm_values[idx])
+        color = f'#{color_int:02x}{color_int:02x}255'  # Biru gradient
+        
+        # Popup info
+        popup_text = f"""
+        <div style="font-family: Arial; font-size: 12px;">
+            <b>Station:</b> {row['Nama']}<br>
+            <b>Lat/Lon:</b> {row['Lat']:.4f}°, {row['Lon']:.4f}°<br>
+            <b>Elevation:</b> {row['Elev']:.1f} m<br>
+            <b>Complete Bouguer:</b> {row.get('Complete Bouger Anomaly', 'N/A'):.2f} mGal<br>
+            <b>Terrain Corr:</b> {row.get('Koreksi Medan', 'N/A'):.2f} mGal
+        </div>
+        """
+        
+        folium.CircleMarker(
+            location=[row['Lat'], row['Lon']],
+            radius=8,
+            popup=folium.Popup(popup_text, max_width=300),
+            color=color,
+            fill=True,
+            fill_color=color,
+            fill_opacity=0.7,
+            weight=1
+        ).add_to(m)
+    
+    # Tambahkan layer control
+    folium.LayerControl().add_to(m)
+    
+    return m
 # ============================================================
 # CLASS OSSTerrainCorrector YANG DIPERBAIKI
 # ============================================================
@@ -912,7 +924,14 @@ grav = st.sidebar.file_uploader("Input Gravity Multi-Sheets (.xlsx)", type=["xls
 demf = st.sidebar.file_uploader("Upload DEM (CSV/XYZ/TIFF)", type=["csv","txt","xyz","tif","tiff"])
 kmf = st.sidebar.file_uploader("Koreksi Medan manual (optional)", type=["csv","xlsx"])
 G_base = st.sidebar.number_input("G Absolute di Base", value=0.0)
-
+# Di sidebar, tambahkan opsi untuk interactive plots
+st.sidebar.subheader("Interactive Plot Options")
+enable_interactive = st.sidebar.checkbox("Enable Interactive Plots", value=True)
+map_provider = st.sidebar.selectbox(
+    "Map/Plot Provider",
+    ["Plotly (Recommended)", "Folium (Interactive Map)", "Matplotlib (Static)"],
+    index=0
+)
 # ============================================================
 # PARAMETER OSS
 # ============================================================
@@ -1300,112 +1319,175 @@ if run:
     
     with tab5:
         # ============================================================
-        # PLOTTING DENGAN PETA INDONESIA
+        # PLOTTING INTERAKTIF DENGAN PLOTLY ATAU FOLIUM
         # ============================================================
-        st.subheader("🌏 Indonesia Map View")
+        st.subheader("🔍 Interactive Visualization")
         
-        if CARTOPY_AVAILABLE:
-            # Buat dataframe untuk plotting
-            plot_df = df_all.copy()
-            
-            # Pilih data yang akan diplot
+        if enable_interactive:
+            # Pilihan data untuk diplot
             plot_option = st.selectbox(
-                "Select data to plot on Indonesia map:",
-                ["Elevation", "Complete Bouguer Anomaly", "Simple Bouguer Anomaly", 
-                 "Terrain Correction", "FAA (Free Air Anomaly)"]
+                "Select data to visualize:",
+                ["Complete Bouguer Anomaly", "Simple Bouguer Anomaly", 
+                 "Elevation", "Terrain Correction", "FAA (Free Air Anomaly)"],
+                key="interactive_plot_option"
             )
             
-            # Tentukan kolom dan judul berdasarkan pilihan
-            if plot_option == "Elevation":
-                value_col = "Elev"
-                title = "Station Elevation on Indonesia Map"
-                cmap = "terrain"
-            elif plot_option == "Complete Bouguer Anomaly":
+            # Tentukan kolom berdasarkan pilihan
+            if plot_option == "Complete Bouguer Anomaly":
                 value_col = "Complete Bouger Anomaly"
-                title = "Complete Bouguer Anomaly on Indonesia Map"
-                cmap = "RdBu_r"
+                cmap = "Viridis"
             elif plot_option == "Simple Bouguer Anomaly":
                 value_col = "Simple Bouger Anomaly"
-                title = "Simple Bouguer Anomaly on Indonesia Map"
-                cmap = "RdBu_r"
+                cmap = "RdBu"
+            elif plot_option == "Elevation":
+                value_col = "Elev"
+                cmap = "Plasma"
             elif plot_option == "Terrain Correction":
                 value_col = "Koreksi Medan"
-                title = "Terrain Correction on Indonesia Map"
-                cmap = "viridis"
+                cmap = "Viridis"
             else:  # FAA
                 value_col = "FAA"
-                title = "Free Air Anomaly on Indonesia Map"
-                cmap = "RdBu_r"
+                cmap = "RdBu"
             
-            # Plot dengan peta Indonesia
-            if len(plot_df) > 0:
-                col1, col2 = st.columns([2, 1])
-                
-                with col1:
-                    # Plot dengan Cartopy
-                    fig_map = plot_with_cartopy(plot_df, value_col, title, cmap)
-                    if fig_map:
-                        st.pyplot(fig_map)
+            # Pilihan jenis plot
+            plot_type = st.radio(
+                "Select plot type:",
+                ["Scatter Plot", "Contour Plot", "Interactive Map"],
+                horizontal=True
+            )
+            
+            # Container untuk plot
+            plot_container = st.container()
+            
+            with plot_container:
+                if plot_type == "Scatter Plot" and PLOTLY_AVAILABLE:
+                    st.info(f"🔹 **Interactive Scatter Plot**: {plot_option}")
+                    st.write("**Fitur interaktif:** Zoom (scroll/mouse), Pan (drag), Hover (lihat detail), Reset (double-click)")
                     
-                    # Plot kontur
-                    st.subheader("Contour Plot")
-                    fig_contour = plot_contour_with_cartopy(plot_df, value_col, f"{title} - Contour", cmap)
+                    # Buat plot
+                    fig_scatter = create_interactive_scatter(
+                        df=df_all,
+                        x_col='Lon',
+                        y_col='Lat',
+                        color_col=value_col,
+                        title=f'{plot_option} - Interactive Scatter Plot',
+                        hover_cols=['Nama', 'Elev', 'Complete Bouger Anomaly', 'Koreksi Medan']
+                    )
+                    
+                    if fig_scatter:
+                        st.plotly_chart(fig_scatter, use_container_width=True, theme="streamlit")
+                        
+                        # Kontrol tambahan
+                        col1, col2, col3 = st.columns(3)
+                        with col1:
+                            point_size = st.slider("Point Size", 5, 20, 10)
+                            fig_scatter.update_traces(marker=dict(size=point_size))
+                        with col2:
+                            opacity = st.slider("Opacity", 0.1, 1.0, 0.8)
+                            fig_scatter.update_traces(marker=dict(opacity=opacity))
+                        with col3:
+                            if st.button("Reset View"):
+                                fig_scatter.update_layout(
+                                    xaxis=dict(range=[df_all['Lon'].min(), df_all['Lon'].max()]),
+                                    yaxis=dict(range=[df_all['Lat'].min(), df_all['Lat'].max()])
+                                )
+                        
+                        # Tampilkan ulang dengan update
+                        st.plotly_chart(fig_scatter, use_container_width=True, theme="streamlit")
+                    
+                    else:
+                        st.warning("Plotly tidak tersedia. Install dengan: `pip install plotly`")
+                
+                elif plot_type == "Contour Plot" and PLOTLY_AVAILABLE:
+                    st.info(f"🔹 **Interactive Contour Plot**: {plot_option}")
+                    st.write("**Fitur interaktif:** Zoom, Pan, Hover pada kontur dan titik stasiun")
+                    
+                    fig_contour = create_contour_interactive(
+                        df=df_all,
+                        x_col='Lon',
+                        y_col='Lat',
+                        z_col=value_col,
+                        title=f'{plot_option} - Contour Plot'
+                    )
+                    
                     if fig_contour:
-                        st.pyplot(fig_contour)
+                        st.plotly_chart(fig_contour, use_container_width=True, theme="streamlit")
+                    else:
+                        st.warning("Plotly tidak tersedia.")
                 
-                with col2:
-                    # Statistik data
-                    st.subheader("📊 Data Statistics")
-                    st.metric("Min", f"{plot_df[value_col].min():.2f}")
-                    st.metric("Max", f"{plot_df[value_col].max():.2f}")
-                    st.metric("Mean", f"{plot_df[value_col].mean():.2f}")
-                    st.metric("Std Dev", f"{plot_df[value_col].std():.2f}")
+                elif plot_type == "Interactive Map" and FOLIUM_AVAILABLE:
+                    st.info(f"🔹 **Interactive Folium Map**: {plot_option}")
+                    st.write("**Fitur interaktif:** Zoom (scroll/mouse), Pan (drag), Click markers untuk detail, Layer control")
                     
-                    # Informasi lokasi
-                    st.subheader("📍 Location Info")
-                    st.write(f"**Longitude:** {plot_df['Lon'].min():.3f}°E to {plot_df['Lon'].max():.3f}°E")
-                    st.write(f"**Latitude:** {plot_df['Lat'].min():.3f}°N to {plot_df['Lat'].max():.3f}°N")
+                    # Kontrol peta
+                    col1, col2 = st.columns(2)
+                    with col1:
+                        zoom_level = st.slider("Zoom Level", 5, 15, 10)
+                    with col2:
+                        tile_layer = st.selectbox(
+                            "Map Style",
+                            ["OpenStreetMap", "Stamen Terrain", "CartoDB positron", "CartoDB dark_matter"],
+                            index=0
+                        )
                     
-                    # Tampilkan data points
-                    with st.expander("View Station Coordinates"):
-                        st.dataframe(plot_df[['Nama', 'Lon', 'Lat', value_col]].head(10))
+                    # Buat peta
+                    folium_map = create_folium_map(
+                        df=df_all,
+                        zoom_start=zoom_level
+                    )
+                    
+                    if folium_map:
+                        # Simpan peta ke HTML temporary
+                        import tempfile
+                        import streamlit.components.v1 as components
+                        
+                        with tempfile.NamedTemporaryFile(delete=False, suffix='.html') as tmpfile:
+                            folium_map.save(tmpfile.name)
+                            
+                            # Baca HTML dan tampilkan di Streamlit
+                            with open(tmpfile.name, 'r', encoding='utf-8') as f:
+                                html_content = f.read()
+                            
+                            components.html(html_content, height=500)
+                        
+                        st.caption("**Tips:** Gunakan mouse wheel untuk zoom, drag untuk pan, klik marker untuk detail")
+                    else:
+                        st.warning("Folium tidak tersedia. Install dengan: `pip install folium`")
+                
+                else:
+                    # Fallback ke plot statis jika tidak ada library interaktif
+                    st.warning("Library interaktif tidak tersedia. Menampilkan plot statis...")
+                    
+                    if len(df_all) > 0:
+                        fig_static, ax_static = plt.subplots(figsize=(10, 8))
+                        scatter = ax_static.scatter(
+                            df_all['Lon'], df_all['Lat'],
+                            c=df_all[value_col], cmap=cmap, s=50, alpha=0.7
+                        )
+                        ax_static.set_xlabel('Longitude (°E)')
+                        ax_static.set_ylabel('Latitude (°N)')
+                        ax_static.set_title(f'{plot_option} - Static Plot')
+                        ax_static.grid(True, alpha=0.3)
+                        plt.colorbar(scatter, ax=ax_static, label=value_col)
+                        st.pyplot(fig_static)
             
-            else:
-                st.warning("No data available for map plotting.")
+            # Panel informasi samping
+            with st.sidebar.expander("📊 Interactive Plot Info", expanded=True):
+                st.write("**Available Interactions:**")
+                st.write("• **Zoom:** Mouse wheel or box zoom")
+                st.write("• **Pan:** Click and drag")
+                st.write("• **Hover:** Mouse over points for details")
+                st.write("• **Reset:** Double-click on plot")
+                st.write("• **Download:** Camera icon on plot toolbar")
+                
+                st.write("**Installation Tips:**")
+                if not PLOTLY_AVAILABLE:
+                    st.code("pip install plotly", language="bash")
+                if not FOLIUM_AVAILABLE:
+                    st.code("pip install folium", language="bash")
         
         else:
-            st.warning("""
-            **Cartopy is not installed!**
-            
-            To install Cartopy for interactive maps, run:
-            ```
-            pip install cartopy
-            ```
-            
-            Or for conda:
-            ```
-            conda install -c conda-forge cartopy
-            ```
-            
-            **Alternative:** You can use Folium for interactive maps. Install with:
-            ```
-            pip install folium
-            ```
-            """)
-            
-            # Fallback ke plotting sederhana
-            st.info("Showing simple scatter plot instead:")
-            if len(df_all) > 0:
-                fig_simple, ax_simple = plt.subplots(figsize=(10, 8))
-                scatter = ax_simple.scatter(df_all['Lon'], df_all['Lat'], 
-                                          c=df_all['Complete Bouger Anomaly'], 
-                                          s=50, cmap='viridis', alpha=0.7)
-                ax_simple.set_xlabel('Longitude (°E)')
-                ax_simple.set_ylabel('Latitude (°N)')
-                ax_simple.set_title('Gravity Stations Location')
-                ax_simple.grid(True, alpha=0.3)
-                plt.colorbar(scatter, ax=ax_simple, label='Complete Bouguer Anomaly (mGal)')
-                st.pyplot(fig_simple)
+            st.info("Interactive plots are disabled. Enable in sidebar options.")
     
     # ============================================================
     # DOWNLOAD OPTIONS
@@ -1437,4 +1519,5 @@ if run:
             )
     
     st.info("✅ Processing complete! Use the download buttons above to save your results.")
+
 
