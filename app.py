@@ -9,6 +9,15 @@ from PIL import Image
 import os
 import hashlib
 
+# Coba import cartopy, jika tidak ada beri warning
+try:
+    import cartopy.crs as ccrs
+    import cartopy.feature as cfeature
+    CARTOPY_AVAILABLE = True
+except ImportError:
+    CARTOPY_AVAILABLE = False
+    st.warning("Cartopy tidak terinstall. Plot dengan peta tidak akan tersedia.")
+
 # ---------------------------------------------
 # 1. HASH FUNCTION
 # ---------------------------------------------
@@ -399,6 +408,151 @@ def plot_cont(x, y, z, title):
     fig.colorbar(cf, ax=ax, label='Value (mGal)')
     
     return fig
+
+# ============================================================
+# FUNGSI PLOTTING DENGAN CARTOPY (PETA INDONESIA)
+# ============================================================
+def plot_with_cartopy(df, value_col, title, cmap='viridis'):
+    """
+    Plot data dengan peta Indonesia menggunakan Cartopy
+    
+    Parameters:
+    -----------
+    df : pandas.DataFrame
+        Data dengan kolom 'Lon', 'Lat', dan value_col
+    value_col : str
+        Nama kolom yang akan diplot
+    title : str
+        Judul plot
+    cmap : str
+        Colormap untuk plotting
+    """
+    if not CARTOPY_AVAILABLE:
+        st.warning("Cartopy tidak tersedia. Install dengan: pip install cartopy")
+        return None
+    
+    try:
+        # Create figure dengan proyeksi PlateCarree
+        fig = plt.figure(figsize=(12, 10))
+        ax = plt.axes(projection=ccrs.PlateCarree())
+        
+        # Set extent untuk Indonesia (95°E - 141°E, 11°S - 6°N)
+        # Sesuaikan dengan data Anda
+        lon_min = max(df['Lon'].min() - 1, 95)
+        lon_max = min(df['Lon'].max() + 1, 141)
+        lat_min = max(df['Lat'].min() - 1, -11)
+        lat_max = min(df['Lat'].max() + 1, 6)
+        
+        ax.set_extent([lon_min, lon_max, lat_min, lat_max], crs=ccrs.PlateCarree())
+        
+        # Add features peta
+        ax.add_feature(cfeature.LAND, facecolor='lightgray', alpha=0.3)
+        ax.add_feature(cfeature.OCEAN, facecolor='lightblue', alpha=0.5)
+        ax.add_feature(cfeature.COASTLINE, linewidth=0.5)
+        ax.add_feature(cfeature.BORDERS, linestyle=':', linewidth=0.5)
+        ax.add_feature(cfeature.LAKES, alpha=0.5)
+        ax.add_feature(cfeature.RIVERS, linewidth=0.5)
+        
+        # Add gridlines
+        gl = ax.gridlines(draw_labels=True, linewidth=0.5, color='gray', alpha=0.5, linestyle='--')
+        gl.top_labels = False
+        gl.right_labels = False
+        gl.xlabel_style = {'size': 10}
+        gl.ylabel_style = {'size': 10}
+        
+        # Plot data points
+        scatter = ax.scatter(df['Lon'], df['Lat'], 
+                           c=df[value_col], 
+                           s=30, 
+                           cmap=cmap, 
+                           alpha=0.8,
+                           edgecolor='black',
+                           linewidth=0.5,
+                           transform=ccrs.PlateCarree(),
+                           zorder=5)
+        
+        # Add colorbar
+        cbar = plt.colorbar(scatter, ax=ax, orientation='vertical', pad=0.02, shrink=0.8)
+        cbar.set_label(value_col.replace('_', ' '), fontsize=12)
+        
+        # Add title
+        plt.title(title, fontsize=14, fontweight='bold', pad=20)
+        
+        # Add scale bar
+        ax.text(0.02, 0.02, f'Data points: {len(df)}', 
+               transform=ax.transAxes, fontsize=10,
+               bbox=dict(boxstyle="round,pad=0.3", facecolor="white", alpha=0.8))
+        
+        plt.tight_layout()
+        return fig
+    
+    except Exception as e:
+        st.error(f"Error creating Cartopy plot: {e}")
+        return None
+
+def plot_contour_with_cartopy(df, value_col, title, cmap='viridis', grid_resolution=100):
+    """
+    Plot kontur dengan peta latar belakang Indonesia
+    """
+    if not CARTOPY_AVAILABLE:
+        st.warning("Cartopy tidak tersedia. Install dengan: pip install cartopy")
+        return None
+    
+    try:
+        # Buat grid untuk interpolasi
+        lon_grid = np.linspace(df['Lon'].min(), df['Lon'].max(), grid_resolution)
+        lat_grid = np.linspace(df['Lat'].min(), df['Lat'].max(), grid_resolution)
+        lon_mesh, lat_mesh = np.meshgrid(lon_grid, lat_grid)
+        
+        # Interpolasi data
+        values = griddata((df['Lon'], df['Lat']), df[value_col],
+                         (lon_mesh, lat_mesh), method='cubic')
+        
+        # Create figure
+        fig = plt.figure(figsize=(12, 10))
+        ax = plt.axes(projection=ccrs.PlateCarree())
+        
+        # Set extent
+        ax.set_extent([df['Lon'].min()-0.5, df['Lon'].max()+0.5,
+                      df['Lat'].min()-0.5, df['Lat'].max()+0.5],
+                     crs=ccrs.PlateCarree())
+        
+        # Add map features
+        ax.add_feature(cfeature.LAND, facecolor='lightgray', alpha=0.3)
+        ax.add_feature(cfeature.OCEAN, facecolor='lightblue', alpha=0.5)
+        ax.add_feature(cfeature.COASTLINE, linewidth=0.8)
+        ax.add_feature(cfeature.BORDERS, linestyle=':', linewidth=0.8)
+        
+        # Plot contour
+        contour = ax.contourf(lon_mesh, lat_mesh, values,
+                             levels=30, cmap=cmap, alpha=0.7,
+                             transform=ccrs.PlateCarree())
+        
+        # Plot data points
+        ax.scatter(df['Lon'], df['Lat'], 
+                  c='black', s=20, marker='o',
+                  alpha=0.7, transform=ccrs.PlateCarree(),
+                  edgecolor='white', linewidth=0.5)
+        
+        # Add gridlines
+        gl = ax.gridlines(draw_labels=True, linewidth=0.5, 
+                         color='gray', alpha=0.5, linestyle='--')
+        gl.top_labels = False
+        gl.right_labels = False
+        
+        # Add colorbar
+        cbar = plt.colorbar(contour, ax=ax, orientation='vertical', 
+                           pad=0.02, shrink=0.8)
+        cbar.set_label(value_col.replace('_', ' '), fontsize=12)
+        
+        plt.title(title, fontsize=14, fontweight='bold', pad=20)
+        plt.tight_layout()
+        
+        return fig
+    
+    except Exception as e:
+        st.error(f"Error creating contour plot: {e}")
+        return None
 
 # ============================================================
 # CLASS OSSTerrainCorrector YANG DIPERBAIKI
@@ -922,6 +1076,8 @@ if run:
             station_details.append({
                 'Sheet': sh,
                 'Station': station_name,
+                'Lon': station_data['Lon'],
+                'Lat': station_data['Lat'],
                 'Easting': station_data['Easting'],
                 'Northing': station_data['Northing'],
                 'Elevation': station_data['Elev'],
@@ -1034,12 +1190,12 @@ if run:
         st.write(f"**Total sheets processed:** {len(all_dfs)}")
     
     # ============================================================
-    # PLOTTING
+    # PLOTTING - DENGAN PETA INDONESIA
     # ============================================================
-    st.subheader("📈 Visualization")
+    st.subheader("📈 Visualization with Indonesia Map")
     
-    # Plot Parasnis
-    tab1, tab2, tab3, tab4 = st.tabs(["Parasnis Plot", "Topography", "CBA Map", "SBA Map"])
+    # Buat tabs untuk plotting
+    tab1, tab2, tab3, tab4, tab5 = st.tabs(["Parasnis Plot", "Topography", "CBA Map", "SBA Map", "Indonesia Map View"])
     
     with tab1:
         if mask.sum() >= 2:
@@ -1103,6 +1259,115 @@ if run:
             st.pyplot(fig_sba)
         else:
             st.warning("No data available for SBA plot.")
+    
+    with tab5:
+        # ============================================================
+        # PLOTTING DENGAN PETA INDONESIA
+        # ============================================================
+        st.subheader("🌏 Indonesia Map View")
+        
+        if CARTOPY_AVAILABLE:
+            # Buat dataframe untuk plotting
+            plot_df = df_all.copy()
+            
+            # Pilih data yang akan diplot
+            plot_option = st.selectbox(
+                "Select data to plot on Indonesia map:",
+                ["Elevation", "Complete Bouguer Anomaly", "Simple Bouguer Anomaly", 
+                 "Terrain Correction", "FAA (Free Air Anomaly)"]
+            )
+            
+            # Tentukan kolom dan judul berdasarkan pilihan
+            if plot_option == "Elevation":
+                value_col = "Elev"
+                title = "Station Elevation on Indonesia Map"
+                cmap = "terrain"
+            elif plot_option == "Complete Bouguer Anomaly":
+                value_col = "Complete Bouger Anomaly"
+                title = "Complete Bouguer Anomaly on Indonesia Map"
+                cmap = "RdBu_r"
+            elif plot_option == "Simple Bouguer Anomaly":
+                value_col = "Simple Bouger Anomaly"
+                title = "Simple Bouguer Anomaly on Indonesia Map"
+                cmap = "RdBu_r"
+            elif plot_option == "Terrain Correction":
+                value_col = "Koreksi Medan"
+                title = "Terrain Correction on Indonesia Map"
+                cmap = "viridis"
+            else:  # FAA
+                value_col = "FAA"
+                title = "Free Air Anomaly on Indonesia Map"
+                cmap = "RdBu_r"
+            
+            # Plot dengan peta Indonesia
+            if len(plot_df) > 0:
+                col1, col2 = st.columns([2, 1])
+                
+                with col1:
+                    # Plot dengan Cartopy
+                    fig_map = plot_with_cartopy(plot_df, value_col, title, cmap)
+                    if fig_map:
+                        st.pyplot(fig_map)
+                    
+                    # Plot kontur
+                    st.subheader("Contour Plot")
+                    fig_contour = plot_contour_with_cartopy(plot_df, value_col, f"{title} - Contour", cmap)
+                    if fig_contour:
+                        st.pyplot(fig_contour)
+                
+                with col2:
+                    # Statistik data
+                    st.subheader("📊 Data Statistics")
+                    st.metric("Min", f"{plot_df[value_col].min():.2f}")
+                    st.metric("Max", f"{plot_df[value_col].max():.2f}")
+                    st.metric("Mean", f"{plot_df[value_col].mean():.2f}")
+                    st.metric("Std Dev", f"{plot_df[value_col].std():.2f}")
+                    
+                    # Informasi lokasi
+                    st.subheader("📍 Location Info")
+                    st.write(f"**Longitude:** {plot_df['Lon'].min():.3f}°E to {plot_df['Lon'].max():.3f}°E")
+                    st.write(f"**Latitude:** {plot_df['Lat'].min():.3f}°N to {plot_df['Lat'].max():.3f}°N")
+                    
+                    # Tampilkan data points
+                    with st.expander("View Station Coordinates"):
+                        st.dataframe(plot_df[['Nama', 'Lon', 'Lat', value_col]].head(10))
+            
+            else:
+                st.warning("No data available for map plotting.")
+        
+        else:
+            st.warning("""
+            **Cartopy is not installed!**
+            
+            To install Cartopy for interactive maps, run:
+            ```
+            pip install cartopy
+            ```
+            
+            Or for conda:
+            ```
+            conda install -c conda-forge cartopy
+            ```
+            
+            **Alternative:** You can use Folium for interactive maps. Install with:
+            ```
+            pip install folium
+            ```
+            """)
+            
+            # Fallback ke plotting sederhana
+            st.info("Showing simple scatter plot instead:")
+            if len(df_all) > 0:
+                fig_simple, ax_simple = plt.subplots(figsize=(10, 8))
+                scatter = ax_simple.scatter(df_all['Lon'], df_all['Lat'], 
+                                          c=df_all['Complete Bouger Anomaly'], 
+                                          s=50, cmap='viridis', alpha=0.7)
+                ax_simple.set_xlabel('Longitude (°E)')
+                ax_simple.set_ylabel('Latitude (°N)')
+                ax_simple.set_title('Gravity Stations Location')
+                ax_simple.grid(True, alpha=0.3)
+                plt.colorbar(scatter, ax=ax_simple, label='Complete Bouguer Anomaly (mGal)')
+                st.pyplot(fig_simple)
     
     # ============================================================
     # DOWNLOAD OPTIONS
