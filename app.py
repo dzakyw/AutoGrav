@@ -238,34 +238,9 @@ def compute_drift(df, G_base, debug_mode=False):
 
 # KOREKSI LINTANG (LATITUDE CORRECTION) YANG BENAR
 def latitude_correction(lat):
-    """
-    Calculate theoretical gravity at latitude using GRS67 formula
-    g_phi = 978032.67715 * (1 + 0.0053024 * sin^2(phi) - 0.0000059 * sin^2(2phi))
-    
-    Parameters:
-    lat : latitude in degrees
-    
-    Returns:
-    theoretical gravity in mGal
-    """
-    lat = np.asarray(lat, dtype=float)
-    
-    # Validasi range latitude
-    if np.any(np.abs(lat) > 90):
-        invalid_lats = lat[np.abs(lat) > 90]
-        st.warning(f"⚠️ Warning: Found latitude values outside range [-90, 90]: {invalid_lats}")
-    
-    # Konversi ke radians
     phi = np.radians(lat)
-    
-    # Hitung sine terms
-    sin_phi = np.sin(phi)
-    sin_2phi = np.sin(2 * phi)
-    
-    # GRS67 formula
-    lat_corr = 978032.67715 * (1 + 0.0053024 * sin_phi**2 - 0.0000059 * sin_2phi**2)
-    
-    return lat_corr
+    s = np.sin(phi); s2 = np.sin(2*phi)
+    return 978032.67715 * (1 + 0.0053024 * s*s - 0.0000059 * s2*s2)
 
 def free_air(elev):
     """Free-air correction: 0.3086 * elevation (m)"""
@@ -1164,3 +1139,4 @@ if run:
                 )
         
         st.info("Processing Sudah Selesai, Download data hasil")
+
