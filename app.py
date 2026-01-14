@@ -248,7 +248,6 @@ def free_air(elev):
 
 # Konstanta Untuk Dari Paper OSS
 G = 6.67430e-11           # m^3 kg^-1 s^-2
-RHO = 2670.0              # kg/m^3 (2.67 g/cm^3)
 NANO_TO_MGAL = 1e-6       # 1 nGal = 1e-6 mGal
 
 def terrain_effect_cylindrical_sector(R1, R2, theta1, theta2, z, density):
@@ -314,7 +313,7 @@ class OSSTerrainCorrector:
             'min_points_per_sector': 15,
             'use_optimized_elevation': True,
             'debug': False,
-            'density': RHO
+            'density': density
         }
         
         if params:
@@ -699,7 +698,7 @@ def run_oss_test():
                 'threshold_mGal': th,
                 'debug': False,
                 'max_radius': 100,
-                'density': RHO
+                'density': density
             }
             
             tc = calculate_oss_correction(test_dem_df, pd.Series(station), params)
@@ -1139,6 +1138,7 @@ if run:
                 )
         
         st.info("Processing Sudah Selesai, Download data hasil")
+
 
 
 
