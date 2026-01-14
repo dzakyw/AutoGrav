@@ -1000,7 +1000,7 @@ if run:
         
         df["Koreksi Medan"] = tc_list
         df["X-Parasnis"] = df["Koreksi Medan"]
-        df["Y-Parasnis"] = df["Free Air Anomaly"]
+        df["Y-Parasnis"] = df["FAA"]
         df["Hari"] = sh
         
         all_dfs.append(df)
@@ -1139,6 +1139,7 @@ if run:
                 )
         
         st.info("Processing Sudah Selesai, Download data hasil")
+
 
 
 
