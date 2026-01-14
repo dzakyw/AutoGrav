@@ -999,8 +999,8 @@ if run:
                     st.metric("Max", f"{tc_array.max():.3f} mGal")
         
         df["Koreksi Medan"] = tc_list
-        df["X-Parasnis"] = 0.04192 * df["Elev"] - df["Koreksi Medan"]
-        df["Y-Parasnis"] = df["Free Air Correction"]
+        df["X-Parasnis"] = df["Koreksi Medan"]
+        df["Y-Parasnis"] = df["Free Air Anomaly"]
         df["Hari"] = sh
         
         all_dfs.append(df)
@@ -1139,6 +1139,7 @@ if run:
                 )
         
         st.info("Processing Sudah Selesai, Download data hasil")
+
 
 
 
