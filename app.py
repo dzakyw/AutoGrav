@@ -962,9 +962,8 @@ if run:
         # Perhitungan koreksi
         df["Koreksi Lintang"] = latitude_correction(df["Lat"])
         df["Free Air Correction"] = free_air(df["Elev"])
-        df["G_absolute"] = df["Nama"].map(Gmap) + G_base
-        df["FAA"] = df["G_absolute"] - df["Koreksi Lintang"] + df["Free Air Correction"]
-
+        df["FAA"] = df["G_read (mGal)"] - df["Koreksi Lintang"] + df["Free Air Correction"]
+        
         tc_list = []
         nstations = len(df)
         
