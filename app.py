@@ -1207,223 +1207,10 @@ def plot_density_validation(df, optimal_density):
 # st.subheader("Visualisasi Hasil")
 # tab1, tab2, tab3, tab4 = st.tabs(["Parasnis Plot", "Topography", "CBA Map", "Data Export"])
 
-# Menjadi:
-st.subheader("Visualisasi Hasil")
-tab1, tab2, tab3, tab4, tab5 = st.tabs(["Parasnis Plot", "Topography", "CBA Map", "Analisis Densitas", "Data Export"])
 
 # Tab1-3 tetap sama...
 
-# Tab 4: Analisis Densitas (BARU)
-with tab4:
-    st.header("📊 Analisis Densitas Komprehensif")
-    
-    if 'df_all' in locals() and len(df_all) > 0:
-        # Jalankan analisis densitas komprehensif
-        with st.spinner("Menghitung densitas dengan berbagai metode..."):
-            optimal_density, density_results = comprehensive_density_analysis(df_all, debug=debug_mode)
-        
-        if optimal_density is not None:
-            # Update perhitungan dengan densitas optimal
-            st.subheader("🔄 Perhitungan Ulang dengan Densitas Optimal")
-            
-            # Hitung Bouguer anomaly dengan densitas optimal
-            df_all["Bouger Correction Optimal"] = 0.04192 * optimal_density * df_all["Elev"]
-            df_all["Simple Bouger Anomaly Optimal"] = df_all["FAA"] - df_all["Bouger Correction Optimal"]
-            df_all["Complete Bouger Anomaly Optimal"] = df_all["Simple Bouger Anomaly Optimal"] + df_all["Koreksi Medan"]
-            
-            # Update juga dengan densitas dari Parasnis (jika berbeda)
-            if 'slope' in locals() and not np.isnan(slope):
-                parasnis_density = slope / 0.04192
-                df_all["Bouger Correction Parasnis"] = 0.04192 * parasnis_density * df_all["Elev"]
-                df_all["Simple Bouger Anomaly Parasnis"] = df_all["FAA"] - df_all["Bouger Correction Parasnis"]
-                df_all["Complete Bouger Anomaly Parasnis"] = df_all["Simple Bouger Anomaly Parasnis"] + df_all["Koreksi Medan"]
-            
-            # Tampilkan plot validasi
-            fig_validation = plot_density_validation(df_all, optimal_density)
-            if fig_validation:
-                st.pyplot(fig_validation)
-            
-            # Opsi untuk menggunakan densitas yang berbeda
-            st.subheader("⚙️ Pilih Densitas untuk Perhitungan Final")
-            
-            col1, col2, col3 = st.columns(3)
-            with col1:
-                use_optimal = st.checkbox("Gunakan densitas optimal", value=True)
-            with col2:
-                use_parasnis = st.checkbox("Gunakan densitas Parasnis", value=False)
-            with col3:
-                custom_density = st.number_input("Densitas kustom (g/cm³)", 
-                                                value=float(optimal_density), 
-                                                min_value=1.0, max_value=4.0, step=0.01)
-            
-            if use_optimal:
-                final_density = optimal_density
-                st.success(f"Menggunakan densitas optimal: {final_density:.3f} g/cm³")
-            elif use_parasnis and 'slope' in locals() and not np.isnan(slope):
-                final_density = parasnis_density
-                st.info(f"Menggunakan densitas dari Parasnis: {final_density:.3f} g/cm³")
-            else:
-                final_density = custom_density
-                st.warning(f"Menggunakan densitas kustom: {final_density:.3f} g/cm³")
-            
-            # Perhitungan final dengan densitas terpilih
-            df_all["Bouger Correction Final"] = 0.04192 * final_density * df_all["Elev"]
-            df_all["Simple Bouger Anomaly Final"] = df_all["FAA"] - df_all["Bouger Correction Final"]
-            df_all["Complete Bouger Anomaly Final"] = df_all["Simple Bouger Anomaly Final"] + df_all["Koreksi Medan"]
-            
-            # Tampilkan statistik
-            st.subheader("📈 Statistik Anomali Bouguer Final")
-            
-            col1, col2, col3, col4 = st.columns(4)
-            with col1:
-                st.metric("Min CBA", f"{df_all['Complete Bouger Anomaly Final'].min():.1f} mGal")
-            with col2:
-                st.metric("Max CBA", f"{df_all['Complete Bouger Anomaly Final'].max():.1f} mGal")
-            with col3:
-                st.metric("Mean CBA", f"{df_all['Complete Bouger Anomaly Final'].mean():.1f} mGal")
-            with col4:
-                st.metric("Std Dev CBA", f"{df_all['Complete Bouger Anomaly Final'].std():.1f} mGal")
-            
-            # Plot distribusi CBA final
-            fig_cba_final, ax_cba_final = plt.subplots(figsize=(10, 5))
-            ax_cba_final.hist(df_all['Complete Bouger Anomaly Final'], bins=30, 
-                             alpha=0.7, edgecolor='black', color='green')
-            ax_cba_final.axvline(df_all['Complete Bouger Anomaly Final'].mean(), 
-                               color='red', linestyle='--',
-                               label=f'Mean: {df_all["Complete Bouger Anomaly Final"].mean():.1f} mGal')
-            ax_cba_final.set_xlabel('Complete Bouguer Anomaly (mGal)')
-            ax_cba_final.set_ylabel('Frequency')
-            ax_cba_final.set_title(f'Distribusi CBA Final (ρ = {final_density:.3f} g/cm³)')
-            ax_cba_final.legend()
-            ax_cba_final.grid(True, alpha=0.3)
-            st.pyplot(fig_cba_final)
-            
-            # Simpan densitas final ke session state untuk digunakan di tab lain
-            st.session_state.final_density = final_density
-            st.session_state.density_results = density_results
-            
-    else:
-        st.warning("Harap proses data terlebih dahulu di tab utama.")
 
-# Tab 5: Data Export (diperbarui)
-with tab5:
-    st.subheader("Download Hasil Perhitungan")
-    
-    # Tambahkan informasi densitas ke file export jika ada
-    if 'final_density' in st.session_state:
-        st.info(f"Densitas yang digunakan: {st.session_state.final_density:.3f} g/cm³")
-    
-    col1, col2, col3 = st.columns(3)
-    
-    with col1:
-        csv = df_all.to_csv(index=False)
-        st.download_button(
-            label="Download Processed Data (.csv)",
-            data=csv.encode('utf-8'),
-            file_name="autograv_results.csv",
-            mime="text/csv"
-        )
-    
-    with col2:
-        if station_details:
-            details_df = pd.DataFrame(station_details)
-            details_csv = details_df.to_csv(index=False)
-            st.download_button(
-                label="Download Station Details (.csv)",
-                data=details_csv.encode('utf-8'),
-                file_name="autograv_station_details.csv",
-                mime="text/csv"
-            )
-    
-    with col3:
-        # Export hasil analisis densitas jika ada
-        if 'density_results' in st.session_state:
-            density_df = st.session_state.density_results
-            density_csv = density_df.to_csv(index=False)
-            st.download_button(
-                label="Download Density Analysis (.csv)",
-                data=density_csv.encode('utf-8'),
-                file_name="autograv_density_analysis.csv",
-                mime="text/csv"
-            )
-    
-    # Tampilkan summary
-    st.info("### Ringkasan Hasil")
-    
-    if 'final_density' in st.session_state:
-        st.write(f"- **Densitas yang digunakan:** {st.session_state.final_density:.3f} g/cm³")
-    
-    if 'slope' in locals() and not np.isnan(slope):
-        st.write(f"- **Gradien Parasnis (K):** {slope:.5f}")
-        st.write(f"- **R² Parasnis:** {r_squared:.3f}")
-    
-    st.write(f"- **Total stasiun diproses:** {len(df_all)}")
-    st.write(f"- **Total sheets:** {len(all_dfs)}")
-    
-    st.success("Processing Sudah Selesai, Download data hasil")
-
-# ============================================================
-# TAMBAHAN: Fungsi untuk debugging gradien tinggi
-# ============================================================
-
-def debug_high_gradient(df_all, debug_mode=True):
-    """
-    Fungsi khusus untuk debugging gradien Parasnis yang terlalu tinggi.
-    """
-    if debug_mode:
-        st.subheader("🔍 Debugging Gradien Parasnis Tinggi")
-        
-        # Analisis penyebab
-        causes = []
-        
-        # 1. Cek range data
-        if 'X-Parasnis' in df_all.columns and 'Y-Parasnis' in df_all.columns:
-            x_range = df_all['X-Parasnis'].max() - df_all['X-Parasnis'].min()
-            y_range = df_all['Y-Parasnis'].max() - df_all['Y-Parasnis'].min()
-            
-            ratio = y_range / x_range if x_range != 0 else float('inf')
-            
-            if ratio > 1000:
-                causes.append(f"Range Y ({y_range:.1f}) >> Range X ({x_range:.1f}), ratio: {ratio:.0f}")
-        
-        # 2. Cek outlier
-        from scipy import stats
-        if 'Y-Parasnis' in df_all.columns:
-            z_scores = np.abs(stats.zscore(df_all['Y-Parasnis'].dropna()))
-            outlier_count = np.sum(z_scores > 3)
-            if outlier_count > 0:
-                causes.append(f"{outlier_count} outlier dalam Y-Parasnis (|z| > 3)")
-        
-        # 3. Cek konsistensi base station
-        if 'Nama' in df_all.columns:
-            base_name = df_all['Nama'].iloc[0]
-            base_readings = df_all[df_all['Nama'] == base_name]
-            if len(base_readings) > 1:
-                g_variation = base_readings['G_read (mGal)'].std()
-                if g_variation > 1.0:
-                    causes.append(f"Base station {base_name} tidak konsisten (std={g_variation:.2f} mGal)")
-        
-        # 4. Tampilkan penyebab
-        if causes:
-            st.warning("**Penyebab potensial gradien tinggi:**")
-            for cause in causes:
-                st.write(f"- {cause}")
-            
-            # Solusi
-            st.info("**Solusi yang dicoba:**")
-            st.write("1. Gunakan metode Nettleton untuk validasi densitas")
-            st.write("2. Periksa konsistensi pengukuran base station")
-            st.write("3. Cek koreksi medan (TC) - apakah terlalu besar/kecil?")
-            st.write("4. Verifikasi nilai G_base yang digunakan")
-            
-            return True
-        
-    return False
-
-# Panggil fungsi debug setelah perhitungan Parasnis
-if run and 'slope' in locals() and not np.isnan(slope):
-    if abs(slope) > 0.15:  # Jika gradien > 0.15
-        debug_high_gradient(df_all, debug_mode)
         
 # ============================================================
 # UI STREAMLIT
@@ -1745,10 +1532,10 @@ if run:
         st.write(f"**Total rows processed:** {len(df_all)}")
         st.write(f"**Total sheets processed:** {len(all_dfs)}")
     
+    # Menjadi:
     st.subheader("Visualisasi Hasil")
-    
-    tab1, tab2, tab3, tab4 = st.tabs(["Parasnis Plot", "Topography", "CBA Map", "Data Export"])
-    
+    tab1, tab2, tab3, tab4, tab5 = st.tabs(["Parasnis Plot", "Topography", "CBA Map", "Analisis Densitas", "Data Export"])
+
     with tab1:
         if mask.sum() >= 2:
             X = df_all.loc[mask, "X-Parasnis"].values
@@ -1793,32 +1580,220 @@ if run:
         else:
             st.warning("No data available for CBA plot.")
     
+   
+        # Tab 4: Analisis Densitas (BARU)
     with tab4:
-        st.subheader("Download Hasil Perhitungan")
+    st.header("📊 Analisis Densitas Komprehensif")
+    
+    if 'df_all' in locals() and len(df_all) > 0:
+        # Jalankan analisis densitas komprehensif
+        with st.spinner("Menghitung densitas dengan berbagai metode..."):
+            optimal_density, density_results = comprehensive_density_analysis(df_all, debug=debug_mode)
         
-        col1, col2 = st.columns(2)
-        
-        with col1:
-            csv = df_all.to_csv(index=False)
+        if optimal_density is not None:
+            # Update perhitungan dengan densitas optimal
+            st.subheader("🔄 Perhitungan Ulang dengan Densitas Optimal")
+            
+            # Hitung Bouguer anomaly dengan densitas optimal
+            df_all["Bouger Correction Optimal"] = 0.04192 * optimal_density * df_all["Elev"]
+            df_all["Simple Bouger Anomaly Optimal"] = df_all["FAA"] - df_all["Bouger Correction Optimal"]
+            df_all["Complete Bouger Anomaly Optimal"] = df_all["Simple Bouger Anomaly Optimal"] + df_all["Koreksi Medan"]
+            
+            # Update juga dengan densitas dari Parasnis (jika berbeda)
+            if 'slope' in locals() and not np.isnan(slope):
+                parasnis_density = slope / 0.04192
+                df_all["Bouger Correction Parasnis"] = 0.04192 * parasnis_density * df_all["Elev"]
+                df_all["Simple Bouger Anomaly Parasnis"] = df_all["FAA"] - df_all["Bouger Correction Parasnis"]
+                df_all["Complete Bouger Anomaly Parasnis"] = df_all["Simple Bouger Anomaly Parasnis"] + df_all["Koreksi Medan"]
+            
+            # Tampilkan plot validasi
+            fig_validation = plot_density_validation(df_all, optimal_density)
+            if fig_validation:
+                st.pyplot(fig_validation)
+            
+            # Opsi untuk menggunakan densitas yang berbeda
+            st.subheader("⚙️ Pilih Densitas untuk Perhitungan Final")
+            
+            col1, col2, col3 = st.columns(3)
+            with col1:
+                use_optimal = st.checkbox("Gunakan densitas optimal", value=True)
+            with col2:
+                use_parasnis = st.checkbox("Gunakan densitas Parasnis", value=False)
+            with col3:
+                custom_density = st.number_input("Densitas kustom (g/cm³)", 
+                                                value=float(optimal_density), 
+                                                min_value=1.0, max_value=4.0, step=0.01)
+            
+            if use_optimal:
+                final_density = optimal_density
+                st.success(f"Menggunakan densitas optimal: {final_density:.3f} g/cm³")
+            elif use_parasnis and 'slope' in locals() and not np.isnan(slope):
+                final_density = parasnis_density
+                st.info(f"Menggunakan densitas dari Parasnis: {final_density:.3f} g/cm³")
+            else:
+                final_density = custom_density
+                st.warning(f"Menggunakan densitas kustom: {final_density:.3f} g/cm³")
+            
+            # Perhitungan final dengan densitas terpilih
+            df_all["Bouger Correction Final"] = 0.04192 * final_density * df_all["Elev"]
+            df_all["Simple Bouger Anomaly Final"] = df_all["FAA"] - df_all["Bouger Correction Final"]
+            df_all["Complete Bouger Anomaly Final"] = df_all["Simple Bouger Anomaly Final"] + df_all["Koreksi Medan"]
+            
+            # Tampilkan statistik
+            st.subheader("📈 Statistik Anomali Bouguer Final")
+            
+            col1, col2, col3, col4 = st.columns(4)
+            with col1:
+                st.metric("Min CBA", f"{df_all['Complete Bouger Anomaly Final'].min():.1f} mGal")
+            with col2:
+                st.metric("Max CBA", f"{df_all['Complete Bouger Anomaly Final'].max():.1f} mGal")
+            with col3:
+                st.metric("Mean CBA", f"{df_all['Complete Bouger Anomaly Final'].mean():.1f} mGal")
+            with col4:
+                st.metric("Std Dev CBA", f"{df_all['Complete Bouger Anomaly Final'].std():.1f} mGal")
+            
+            # Plot distribusi CBA final
+            fig_cba_final, ax_cba_final = plt.subplots(figsize=(10, 5))
+            ax_cba_final.hist(df_all['Complete Bouger Anomaly Final'], bins=30, 
+                             alpha=0.7, edgecolor='black', color='green')
+            ax_cba_final.axvline(df_all['Complete Bouger Anomaly Final'].mean(), 
+                               color='red', linestyle='--',
+                               label=f'Mean: {df_all["Complete Bouger Anomaly Final"].mean():.1f} mGal')
+            ax_cba_final.set_xlabel('Complete Bouguer Anomaly (mGal)')
+            ax_cba_final.set_ylabel('Frequency')
+            ax_cba_final.set_title(f'Distribusi CBA Final (ρ = {final_density:.3f} g/cm³)')
+            ax_cba_final.legend()
+            ax_cba_final.grid(True, alpha=0.3)
+            st.pyplot(fig_cba_final)
+            
+            # Simpan densitas final ke session state untuk digunakan di tab lain
+            st.session_state.final_density = final_density
+            st.session_state.density_results = density_results
+            
+    else:
+        st.warning("Harap proses data terlebih dahulu di tab utama.")
+
+    # Tab 5: Data Export (diperbarui)
+    with tab5:
+    st.subheader("Download Hasil Perhitungan")
+    
+    # Tambahkan informasi densitas ke file export jika ada
+    if 'final_density' in st.session_state:
+        st.info(f"Densitas yang digunakan: {st.session_state.final_density:.3f} g/cm³")
+    
+    col1, col2, col3 = st.columns(3)
+    
+    with col1:
+        csv = df_all.to_csv(index=False)
+        st.download_button(
+            label="Download Processed Data (.csv)",
+            data=csv.encode('utf-8'),
+            file_name="autograv_results.csv",
+            mime="text/csv"
+        )
+    
+    with col2:
+        if station_details:
+            details_df = pd.DataFrame(station_details)
+            details_csv = details_df.to_csv(index=False)
             st.download_button(
-                label="Download Processed Data (.csv)",
-                data=csv.encode('utf-8'),
-                file_name="autograv_results.csv",
+                label="Download Station Details (.csv)",
+                data=details_csv.encode('utf-8'),
+                file_name="autograv_station_details.csv",
                 mime="text/csv"
             )
+    
+    with col3:
+        # Export hasil analisis densitas jika ada
+        if 'density_results' in st.session_state:
+            density_df = st.session_state.density_results
+            density_csv = density_df.to_csv(index=False)
+            st.download_button(
+                label="Download Density Analysis (.csv)",
+                data=density_csv.encode('utf-8'),
+                file_name="autograv_density_analysis.csv",
+                mime="text/csv"
+            )
+    
+    # Tampilkan summary
+    st.info("### Ringkasan Hasil")
+    
+    if 'final_density' in st.session_state:
+        st.write(f"- **Densitas yang digunakan:** {st.session_state.final_density:.3f} g/cm³")
+    
+    if 'slope' in locals() and not np.isnan(slope):
+        st.write(f"- **Gradien Parasnis (K):** {slope:.5f}")
+        st.write(f"- **R² Parasnis:** {r_squared:.3f}")
+    
+    st.write(f"- **Total stasiun diproses:** {len(df_all)}")
+    st.write(f"- **Total sheets:** {len(all_dfs)}")
+    
+    st.success("Processing Sudah Selesai, Download data hasil")
+
+# ============================================================
+# TAMBAHAN: Fungsi untuk debugging gradien tinggi
+# ============================================================
+
+def debug_high_gradient(df_all, debug_mode=True):
+    """
+    Fungsi khusus untuk debugging gradien Parasnis yang terlalu tinggi.
+    """
+    if debug_mode:
+        st.subheader("🔍 Debugging Gradien Parasnis Tinggi")
         
-        with col2:
-            if station_details:
-                details_df = pd.DataFrame(station_details)
-                details_csv = details_df.to_csv(index=False)
-                st.download_button(
-                    label="Download Station Details (.csv)",
-                    data=details_csv.encode('utf-8'),
-                    file_name="autograv_station_details.csv",
-                    mime="text/csv"
-                )
+        # Analisis penyebab
+        causes = []
         
+        # 1. Cek range data
+        if 'X-Parasnis' in df_all.columns and 'Y-Parasnis' in df_all.columns:
+            x_range = df_all['X-Parasnis'].max() - df_all['X-Parasnis'].min()
+            y_range = df_all['Y-Parasnis'].max() - df_all['Y-Parasnis'].min()
+            
+            ratio = y_range / x_range if x_range != 0 else float('inf')
+            
+            if ratio > 1000:
+                causes.append(f"Range Y ({y_range:.1f}) >> Range X ({x_range:.1f}), ratio: {ratio:.0f}")
+        
+        # 2. Cek outlier
+        from scipy import stats
+        if 'Y-Parasnis' in df_all.columns:
+            z_scores = np.abs(stats.zscore(df_all['Y-Parasnis'].dropna()))
+            outlier_count = np.sum(z_scores > 3)
+            if outlier_count > 0:
+                causes.append(f"{outlier_count} outlier dalam Y-Parasnis (|z| > 3)")
+        
+        # 3. Cek konsistensi base station
+        if 'Nama' in df_all.columns:
+            base_name = df_all['Nama'].iloc[0]
+            base_readings = df_all[df_all['Nama'] == base_name]
+            if len(base_readings) > 1:
+                g_variation = base_readings['G_read (mGal)'].std()
+                if g_variation > 1.0:
+                    causes.append(f"Base station {base_name} tidak konsisten (std={g_variation:.2f} mGal)")
+        
+        # 4. Tampilkan penyebab
+        if causes:
+            st.warning("**Penyebab potensial gradien tinggi:**")
+            for cause in causes:
+                st.write(f"- {cause}")
+            
+            # Solusi
+            st.info("**Solusi yang dicoba:**")
+            st.write("1. Gunakan metode Nettleton untuk validasi densitas")
+            st.write("2. Periksa konsistensi pengukuran base station")
+            st.write("3. Cek koreksi medan (TC) - apakah terlalu besar/kecil?")
+            st.write("4. Verifikasi nilai G_base yang digunakan")
+            
+            return True
+        
+    return False
+
+# Panggil fungsi debug setelah perhitungan Parasnis
+if run and 'slope' in locals() and not np.isnan(slope):
+    if abs(slope) > 0.15:  # Jika gradien > 0.15
+        debug_high_gradient(df_all, debug_mode)
         st.info("Processing Sudah Selesai, Download data hasil")
+
 
 
 
