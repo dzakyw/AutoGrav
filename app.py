@@ -247,7 +247,7 @@ def latitude_correction(lat):
     phi = np.radians(lat)
     s = np.sin(phi); s2 = np.sin(2*phi)
     return 978032.67715 * (1 + 0.0053024 * s*s - 0.0000059 * s2*s2)
-
+    
 def free_air(elev):
     return 0.3086 * elev
 
@@ -1141,6 +1141,7 @@ if run:
                 )
         
         st.info("Processing Sudah Selesai, Download data hasil")
+
 
 
 
