@@ -242,8 +242,9 @@ def compute_drift(df, G_base, debug_mode=False):
     return Gmap, D
 
 #Koreksi Latitude
+
 def latitude_correction(lat):
-    phi = np.radians(lat)
+phi = np.radians(lat)
     s = np.sin(phi); s2 = np.sin(2*phi)
     return 978032.67715 * (1 + 0.0053024 * s*s - 0.0000059 * s2*s2)
 
@@ -1140,6 +1141,7 @@ if run:
                 )
         
         st.info("Processing Sudah Selesai, Download data hasil")
+
 
 
 
