@@ -1164,4 +1164,3 @@ if run:
                 )
         
         st.info("Processing Sudah Selesai, Download data hasil")
-
