@@ -1583,7 +1583,7 @@ if run:
    
         # Tab 4: Analisis Densitas (BARU)
     with tab4:
-    st.header("📊 Analisis Densitas Komprehensif")
+        st.header("📊 Analisis Densitas Komprehensif")
     
     if 'df_all' in locals() and len(df_all) > 0:
         # Jalankan analisis densitas komprehensif
@@ -1675,7 +1675,7 @@ if run:
 
     # Tab 5: Data Export (diperbarui)
     with tab5:
-    st.subheader("Download Hasil Perhitungan")
+        st.subheader("Download Hasil Perhitungan")
     
     # Tambahkan informasi densitas ke file export jika ada
     if 'final_density' in st.session_state:
@@ -1793,6 +1793,7 @@ if run and 'slope' in locals() and not np.isnan(slope):
     if abs(slope) > 0.15:  # Jika gradien > 0.15
         debug_high_gradient(df_all, debug_mode)
         st.info("Processing Sudah Selesai, Download data hasil")
+
 
 
 
