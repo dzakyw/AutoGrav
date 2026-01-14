@@ -999,7 +999,7 @@ if run:
                     st.metric("Max", f"{tc_array.max():.3f} mGal")
         
         df["Koreksi Medan"] = tc_list
-        df["X-Parasnis"] = df["Koreksi Medan"]
+        df["X-Parasnis"] = 0.04192 * df["Elev"] - df["Koreksi Medan"]  # BENAR!
         df["Y-Parasnis"] = df["FAA"]
         df["Hari"] = sh
         
@@ -1139,6 +1139,7 @@ if run:
                 )
         
         st.info("Processing Sudah Selesai, Download data hasil")
+
 
 
 
