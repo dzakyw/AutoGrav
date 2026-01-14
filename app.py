@@ -743,7 +743,688 @@ def run_oss_test():
     st.write("3. **TC values:** Should be positive and realistic (0-20 mGal for this test)")
     
     return results_df
+# Tambahkan setelah fungsi-fungsi yang ada, sebelum bagian UI Streamlit
 
+# ============================================================
+# METODE-METODE DETERMINASI DENSITAS ALTERNATIF
+# ============================================================
+
+def nettleton_method(df, density_range=(1.5, 3.0), step=0.1, debug=False):
+    """
+    Metode Nettleton (1939): Mencari densitas yang meminimalkan korelasi 
+    antara Complete Bouguer Anomaly dengan elevasi.
+    """
+    if 'FAA' not in df.columns or 'Elev' not in df.columns or 'Koreksi Medan' not in df.columns:
+        st.error("Data tidak lengkap untuk metode Nettleton. Butuh kolom: FAA, Elev, Koreksi Medan")
+        return None, None, None
+    
+    densities = np.arange(density_range[0], density_range[1] + step, step)
+    correlations = []
+    
+    for rho in densities:
+        # Hitung Simple Bouguer Anomaly untuk densitas ini
+        bouguer_correction = 0.04192 * rho * df['Elev']
+        simple_bouguer = df['FAA'] - bouguer_correction
+        
+        # Hitung Complete Bouguer Anomaly (dengan TC)
+        complete_bouguer = simple_bouguer + df['Koreksi Medan']
+        
+        # Hitung korelasi absolut dengan elevasi
+        corr = np.abs(np.corrcoef(complete_bouguer, df['Elev'])[0, 1])
+        correlations.append(corr)
+    
+    # Densitas optimal = yang punya korelasi TERENDAH
+    optimal_idx = np.argmin(correlations)
+    optimal_density = densities[optimal_idx]
+    
+    if debug:
+        st.write(f"**Metode Nettleton:**")
+        st.write(f"- Densitas optimal: {optimal_density:.3f} g/cm³")
+        st.write(f"- Korelasi minimal: {correlations[optimal_idx]:.4f}")
+    
+    return optimal_density, densities, correlations
+
+
+def maximum_entropy_method(df, density_range=(2.0, 3.0), n_points=50, debug=False):
+    """
+    Maximum entropy density determination (Komatiitsch, 1994).
+    Memilih densitas yang memaksimalkan entropi dari distribusi residual.
+    """
+    if 'FAA' not in df.columns or 'Elev' not in df.columns:
+        st.error("Data tidak lengkap untuk metode Maximum Entropy. Butuh kolom: FAA, Elev")
+        return None, None, None
+    
+    from scipy.stats import entropy
+    
+    densities = np.linspace(density_range[0], density_range[1], n_points)
+    entropy_values = []
+    
+    for rho in densities:
+        # Hitung residual Bouguer anomaly
+        bouguer_anomaly = df['FAA'] - 0.04192 * rho * df['Elev']
+        
+        # Histogram residuals (normalisasi ke PDF)
+        hist, bins = np.histogram(bouguer_anomaly, bins=min(30, len(df)//5), density=True)
+        
+        # Hitung entropy (hindari log(0))
+        hist_safe = hist.copy()
+        hist_safe[hist_safe == 0] = 1e-10
+        ent = entropy(hist_safe)
+        entropy_values.append(ent)
+    
+    # Densitas optimal = maksimum entropy
+    optimal_idx = np.argmax(entropy_values)
+    optimal_density = densities[optimal_idx]
+    
+    if debug:
+        st.write(f"**Metode Maximum Entropy:**")
+        st.write(f"- Densitas optimal: {optimal_density:.3f} g/cm³")
+        st.write(f"- Entropi maksimal: {entropy_values[optimal_idx]:.4f}")
+    
+    return optimal_density, densities, entropy_values
+
+
+def iterative_least_squares_method(df, initial_rho=2.67, max_iter=20, tol=0.001, debug=False):
+    """
+    Iterative least squares density determination.
+    """
+    if 'FAA' not in df.columns or 'Elev' not in df.columns:
+        st.error("Data tidak lengkap untuk metode Iterative LS. Butuh kolom: FAA, Elev")
+        return None, 0
+    
+    rho = initial_rho
+    prev_rho = 0
+    history = []
+    
+    for i in range(max_iter):
+        # Hitung Bouguer anomaly
+        bouguer = df['FAA'] - 0.04192 * rho * df['Elev']
+        
+        # Linear regression: FAA = slope * Elev + intercept
+        # slope = 0.04192 * rho_optimal
+        X = df['Elev'].values.reshape(-1, 1)
+        y = df['FAA'].values
+        
+        # Simple least squares
+        slope, intercept = np.polyfit(df['Elev'], df['FAA'], 1)
+        
+        # Update density
+        new_rho = slope / 0.04192
+        
+        history.append(new_rho)
+        
+        # Check convergence
+        if abs(new_rho - rho) < tol:
+            if debug:
+                st.write(f"**Metode Iterative Least Squares:**")
+                st.write(f"- Densitas optimal: {new_rho:.3f} g/cm³")
+                st.write(f"- Iterasi: {i+1}")
+                st.write(f"- Slope: {slope:.6f}")
+            return new_rho, i+1
+        
+        rho = new_rho
+    
+    if debug:
+        st.write(f"**Metode Iterative Least Squares:** (tidak konvergen dalam {max_iter} iterasi)")
+        st.write(f"- Densitas akhir: {rho:.3f} g/cm³")
+    
+    return rho, max_iter
+
+
+def comprehensive_density_analysis(df, debug=True):
+    """
+    Analisis densitas komprehensif dengan berbagai metode.
+    """
+    st.subheader("🔄 Analisis Densitas Komprehensif")
+    
+    if 'X-Parasnis' not in df.columns or 'Y-Parasnis' not in df.columns:
+        st.error("Data tidak lengkap untuk analisis densitas.")
+        return None
+    
+    results = {}
+    
+    # 1. Metode Parasnis
+    mask = df[['X-Parasnis', 'Y-Parasnis']].notnull().all(axis=1)
+    if mask.sum() >= 2:
+        X = df.loc[mask, 'X-Parasnis'].values
+        Y = df.loc[mask, 'Y-Parasnis'].values
+        
+        # Robust regression menggunakan RANSAC untuk menghindari outlier
+        from sklearn.linear_model import RANSACRegressor
+        ransac = RANSACRegressor()
+        ransac.fit(X.reshape(-1, 1), Y)
+        slope_ransac = ransac.estimator_.coef_[0]
+        
+        # Juga hitung dengan polyfit biasa untuk perbandingan
+        slope_poly, intercept_poly = np.polyfit(X, Y, 1)
+        
+        # Gunakan rata-rata jika tidak berbeda jauh
+        if abs(slope_ransac - slope_poly) / abs(slope_poly) < 0.2:
+            slope_final = (slope_ransac + slope_poly) / 2
+        else:
+            slope_final = slope_poly  # fallback ke polyfit
+        
+        density_parasnis = slope_final / 0.04192
+        results['Parasnis'] = density_parasnis
+        
+        if debug:
+            st.write(f"**Metode Parasnis:**")
+            st.write(f"- Slope (K): {slope_final:.5f}")
+            st.write(f"- Densitas: {density_parasnis:.3f} g/cm³")
+            st.write(f"- RANSAC slope: {slope_ransac:.5f}")
+            st.write(f"- Polyfit slope: {slope_poly:.5f}")
+    
+    # 2. Metode Nettleton
+    if 'FAA' in df.columns and 'Elev' in df.columns and 'Koreksi Medan' in df.columns:
+        density_nettleton, densities_net, correlations = nettleton_method(
+            df, density_range=(1.5, 3.5), step=0.05, debug=debug
+        )
+        if density_nettleton is not None:
+            results['Nettleton'] = density_nettleton
+            
+            # Plot Nettleton
+            fig_net, ax_net = plt.subplots(figsize=(10, 5))
+            ax_net.plot(densities_net, correlations, 'b-o', linewidth=2, markersize=5)
+            ax_net.axvline(density_nettleton, color='r', linestyle='--', 
+                          label=f'Optimal: {density_nettleton:.3f} g/cm³')
+            ax_net.set_xlabel('Densitas (g/cm³)')
+            ax_net.set_ylabel('|Korelasi dengan Elevasi|')
+            ax_net.set_title('Metode Nettleton: Densitas Optimal Meminimalkan Korelasi')
+            ax_net.grid(True, alpha=0.3)
+            ax_net.legend()
+            st.pyplot(fig_net)
+    
+    # 3. Metode Maximum Entropy
+    density_entropy, densities_ent, entropy_vals = maximum_entropy_method(
+        df, density_range=(1.5, 3.5), n_points=50, debug=debug
+    )
+    if density_entropy is not None:
+        results['Maximum Entropy'] = density_entropy
+    
+    # 4. Metode Iterative Least Squares
+    density_ils, iterations = iterative_least_squares_method(
+        df, initial_rho=2.67, max_iter=20, tol=0.001, debug=debug
+    )
+    if density_ils is not None:
+        results['Iterative LS'] = density_ils
+    
+    # 5. Tampilkan hasil semua metode
+    if results:
+        st.subheader("📊 Hasil Semua Metode")
+        
+        result_df = pd.DataFrame.from_dict(results, orient='index', 
+                                          columns=['Densitas (g/cm³)'])
+        result_df['Metode'] = result_df.index
+        
+        # Urutkan berdasarkan densitas
+        result_df = result_df.sort_values('Densitas (g/cm³)')
+        
+        # Hitung statistik
+        mean_density = result_df['Densitas (g/cm³)'].mean()
+        median_density = result_df['Densitas (g/cm³)'].median()
+        std_density = result_df['Densitas (g/cm³)'].std()
+        
+        # Tampilkan tabel
+        st.dataframe(result_df.style.format({
+            'Densitas (g/cm³)': '{:.3f}'
+        }))
+        
+        # Visualisasi perbandingan
+        fig_comp, ax_comp = plt.subplots(figsize=(10, 6))
+        methods = result_df['Metode'].values
+        densities = result_df['Densitas (g/cm³)'].values
+        
+        bars = ax_comp.barh(methods, densities, color='skyblue', alpha=0.7)
+        ax_comp.axvline(mean_density, color='red', linestyle='--', 
+                       label=f'Rata-rata: {mean_density:.3f} g/cm³')
+        ax_comp.axvline(median_density, color='green', linestyle='--', 
+                       label=f'Median: {median_density:.3f} g/cm³')
+        
+        # Tambahkan nilai di bar
+        for i, (bar, density) in enumerate(zip(bars, densities)):
+            ax_comp.text(density + 0.01, bar.get_y() + bar.get_height()/2,
+                        f'{density:.3f}', va='center', fontweight='bold')
+        
+        ax_comp.set_xlabel('Densitas (g/cm³)')
+        ax_comp.set_title('Perbandingan Hasil Berbagai Metode')
+        ax_comp.legend()
+        ax_comp.grid(True, alpha=0.3, axis='x')
+        
+        st.pyplot(fig_comp)
+        
+        # Rekomendasi
+        st.subheader("✅ Rekomendasi Densitas")
+        
+        # Pilih berdasarkan konsensus metode
+        if std_density < 0.1:  # Jika semua metode setuju
+            recommended = mean_density
+            confidence = "Tinggi"
+        elif std_density < 0.2:
+            recommended = median_density
+            confidence = "Sedang"
+        else:
+            recommended = median_density
+            confidence = "Rendah (perlu validasi lebih lanjut)"
+        
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            st.metric("Densitas Rekomendasi", f"{recommended:.3f} g/cm³")
+        with col2:
+            st.metric("Konsistensi Metode", f"{std_density:.3f} g/cm³")
+        with col3:
+            st.metric("Tingkat Keyakinan", confidence)
+        
+        # Saran berdasarkan nilai densitas
+        if recommended < 2.0:
+            st.warning("⚠️ Densitas rendah (< 2.0 g/cm³). Kemungkinan batuan sedimen tak terkompaksi atau data error.")
+        elif recommended < 2.3:
+            st.info("ℹ️ Densitas rendah-sedang (2.0-2.3 g/cm³). Khas untuk batuan sedimen.")
+        elif recommended < 2.7:
+            st.success("✅ Densitas sedang (2.3-2.7 g/cm³). Khas untuk batuan sedimen terkompaksi atau batuan beku asam.")
+        elif recommended < 3.0:
+            st.info("ℹ️ Densitas tinggi (2.7-3.0 g/cm³). Khas untuk batuan beku basa atau batuan metamorf.")
+        else:
+            st.warning("⚠️ Densitas sangat tinggi (> 3.0 g/cm³). Periksa kemungkinan error dalam data atau koreksi.")
+        
+        return recommended, result_df
+    else:
+        st.error("Tidak ada metode yang berhasil dihitung.")
+        return None, None
+
+
+def plot_density_validation(df, optimal_density):
+    """
+    Plot untuk validasi densitas optimal.
+    """
+    if optimal_density is None:
+        return None
+    
+    st.subheader("📈 Validasi Densitas Optimal")
+    
+    fig, axes = plt.subplots(2, 3, figsize=(15, 10))
+    
+    # Plot 1: Elevation vs FAA dan Bouguer Anomaly
+    axes[0,0].scatter(df['Elev'], df['FAA'], alpha=0.5, s=30, label='FAA', color='blue')
+    
+    # Hitung Bouguer anomaly dengan densitas optimal
+    if 'FAA' in df.columns and 'Elev' in df.columns:
+        bouguer_optimal = df['FAA'] - 0.04192 * optimal_density * df['Elev']
+        axes[0,0].scatter(df['Elev'], bouguer_optimal, alpha=0.5, s=30, 
+                         label=f'CBA (ρ={optimal_density:.2f})', color='red')
+        
+        # Regresi linear
+        slope_faa, _ = np.polyfit(df['Elev'], df['FAA'], 1)
+        slope_cba, _ = np.polyfit(df['Elev'], bouguer_optimal, 1)
+        
+        axes[0,0].plot(df['Elev'], slope_faa * df['Elev'] + np.mean(df['FAA'] - slope_faa*df['Elev']), 
+                      'b--', alpha=0.7, label=f'FAA slope: {slope_faa:.4f}')
+        axes[0,0].plot(df['Elev'], slope_cba * df['Elev'] + np.mean(bouguer_optimal - slope_cba*df['Elev']), 
+                      'r--', alpha=0.7, label=f'CBA slope: {slope_cba:.4f}')
+    
+    axes[0,0].set_xlabel('Elevasi (m)')
+    axes[0,0].set_ylabel('Anomali (mGal)')
+    axes[0,0].set_title('Elevasi vs Anomali')
+    axes[0,0].legend(loc='best', fontsize=8)
+    axes[0,0].grid(True, alpha=0.3)
+    
+    # Plot 2: X-Parasnis vs Y-Parasnis
+    if 'X-Parasnis' in df.columns and 'Y-Parasnis' in df.columns:
+        mask = df[['X-Parasnis', 'Y-Parasnis']].notnull().all(axis=1)
+        if mask.sum() >= 2:
+            X = df.loc[mask, 'X-Parasnis'].values
+            Y = df.loc[mask, 'Y-Parasnis'].values
+            
+            slope, intercept = np.polyfit(X, Y, 1)
+            axes[0,1].scatter(X, Y, alpha=0.7, s=40, color='purple')
+            axes[0,1].plot(X, slope*X + intercept, 'r-', linewidth=2,
+                          label=f'K = {slope:.5f}\nρ = {slope/0.04192:.2f} g/cm³')
+            
+            axes[0,1].set_xlabel('X-Parasnis (mGal)')
+            axes[0,1].set_ylabel('Y-Parasnis (mGal)')
+            axes[0,1].set_title(f'Diagram Parasnis (ρ = {optimal_density:.2f} g/cm³)')
+            axes[0,1].legend()
+            axes[0,1].grid(True, alpha=0.3)
+    
+    # Plot 3: Distribusi Residual CBA
+    if 'FAA' in df.columns and 'Elev' in df.columns:
+        bouguer_residual = df['FAA'] - 0.04192 * optimal_density * df['Elev']
+        axes[0,2].hist(bouguer_residual, bins=20, alpha=0.7, edgecolor='black', color='orange')
+        axes[0,2].axvline(bouguer_residual.mean(), color='red', linestyle='--',
+                         label=f'Mean: {bouguer_residual.mean():.2f} mGal')
+        axes[0,2].set_xlabel('Residual CBA (mGal)')
+        axes[0,2].set_ylabel('Frekuensi')
+        axes[0,2].set_title('Distribusi Residual CBA')
+        axes[0,2].legend()
+        axes[0,2].grid(True, alpha=0.3, axis='y')
+    
+    # Plot 4: Korelasi vs Densitas (Nettleton-style)
+    densities_test = np.linspace(1.5, 3.5, 50)
+    correlations = []
+    
+    for rho in densities_test:
+        bouguer_test = df['FAA'] - 0.04192 * rho * df['Elev']
+        if 'Koreksi Medan' in df.columns:
+            cba_test = bouguer_test + df['Koreksi Medan']
+        else:
+            cba_test = bouguer_test
+        
+        corr = np.abs(np.corrcoef(cba_test, df['Elev'])[0, 1])
+        correlations.append(corr)
+    
+    axes[1,0].plot(densities_test, correlations, 'b-', linewidth=2)
+    axes[1,0].axvline(optimal_density, color='r', linestyle='--', 
+                     label=f'ρ optimal: {optimal_density:.2f} g/cm³')
+    axes[1,0].set_xlabel('Densitas (g/cm³)')
+    axes[1,0].set_ylabel('|Korelasi|')
+    axes[1,0].set_title('Korelasi CBA-Elevasi vs Densitas')
+    axes[1,0].legend()
+    axes[1,0].grid(True, alpha=0.3)
+    
+    # Plot 5: Peta spasial densitas implisit
+    if 'Easting' in df.columns and 'Northing' in df.columns and 'X-Parasnis' in df.columns and 'Y-Parasnis' in df.columns:
+        # Hitung densitas lokal dengan window
+        window_size = min(5, len(df)//4)
+        local_densities = []
+        
+        for i in range(len(df)):
+            if i >= window_size and i < len(df) - window_size:
+                window_data = df.iloc[i-window_size:i+window_size+1]
+                mask_window = window_data[['X-Parasnis', 'Y-Parasnis']].notnull().all(axis=1)
+                
+                if mask_window.sum() >= 3:
+                    X_local = window_data.loc[mask_window, 'X-Parasnis'].values
+                    Y_local = window_data.loc[mask_window, 'Y-Parasnis'].values
+                    slope_local, _ = np.polyfit(X_local, Y_local, 1)
+                    local_densities.append(slope_local / 0.04192)
+                else:
+                    local_densities.append(np.nan)
+            else:
+                local_densities.append(np.nan)
+        
+        df['Local_Density'] = local_densities
+        
+        valid_mask = ~np.isnan(df['Local_Density'])
+        if valid_mask.any():
+            sc = axes[1,1].scatter(df.loc[valid_mask, 'Easting'], 
+                                  df.loc[valid_mask, 'Northing'], 
+                                  c=df.loc[valid_mask, 'Local_Density'], 
+                                  cmap='viridis', s=50, alpha=0.7)
+            axes[1,1].set_xlabel('Easting (m)')
+            axes[1,1].set_ylabel('Northing (m)')
+            axes[1,1].set_title('Variasi Spasial Densitas Implisit')
+            plt.colorbar(sc, ax=axes[1,1], label='Densitas (g/cm³)')
+        else:
+            axes[1,1].text(0.5, 0.5, 'Data tidak cukup\nuntuk peta spasial', 
+                          ha='center', va='center', transform=axes[1,1].transAxes)
+            axes[1,1].set_title('Variasi Spasial Densitas')
+    
+    # Plot 6: Perbandingan dengan densitas referensi
+    axes[1,2].axhline(y=optimal_density, color='red', linewidth=3, label=f'Optimal: {optimal_density:.2f}')
+    
+    # Densitas referensi untuk batuan umum
+    reference_densities = {
+        'Alluvium': 1.8,
+        'Sandstone': 2.3,
+        'Shale': 2.4,
+        'Limestone': 2.5,
+        'Granite': 2.65,
+        'Basalt': 2.9,
+        'Gabbro': 3.0
+    }
+    
+    y_pos = np.arange(len(reference_densities))
+    densities_ref = list(reference_densities.values())
+    names_ref = list(reference_densities.keys())
+    
+    bars = axes[1,2].barh(y_pos, densities_ref, alpha=0.6, color='gray')
+    
+    # Warn bars based on comparison with optimal
+    for i, density_ref in enumerate(densities_ref):
+        if abs(density_ref - optimal_density) < 0.1:
+            bars[i].set_color('green')
+        elif abs(density_ref - optimal_density) < 0.2:
+            bars[i].set_color('orange')
+        else:
+            bars[i].set_color('gray')
+    
+    axes[1,2].set_yticks(y_pos)
+    axes[1,2].set_yticklabels(names_ref)
+    axes[1,2].set_xlabel('Densitas (g/cm³)')
+    axes[1,2].set_title('Perbandingan dengan Batuan Referensi')
+    axes[1,2].legend()
+    axes[1,2].grid(True, alpha=0.3, axis='x')
+    
+    plt.tight_layout()
+    return fig
+
+
+# Tambahkan bagian ini ke UI Streamlit, setelah tab4
+# ============================================================
+# MODIFIKASI TAB INTERFACE
+# ============================================================
+
+# Ganti bagian ini:
+# st.subheader("Visualisasi Hasil")
+# tab1, tab2, tab3, tab4 = st.tabs(["Parasnis Plot", "Topography", "CBA Map", "Data Export"])
+
+# Menjadi:
+st.subheader("Visualisasi Hasil")
+tab1, tab2, tab3, tab4, tab5 = st.tabs(["Parasnis Plot", "Topography", "CBA Map", "Analisis Densitas", "Data Export"])
+
+# Tab1-3 tetap sama...
+
+# Tab 4: Analisis Densitas (BARU)
+with tab4:
+    st.header("📊 Analisis Densitas Komprehensif")
+    
+    if 'df_all' in locals() and len(df_all) > 0:
+        # Jalankan analisis densitas komprehensif
+        with st.spinner("Menghitung densitas dengan berbagai metode..."):
+            optimal_density, density_results = comprehensive_density_analysis(df_all, debug=debug_mode)
+        
+        if optimal_density is not None:
+            # Update perhitungan dengan densitas optimal
+            st.subheader("🔄 Perhitungan Ulang dengan Densitas Optimal")
+            
+            # Hitung Bouguer anomaly dengan densitas optimal
+            df_all["Bouger Correction Optimal"] = 0.04192 * optimal_density * df_all["Elev"]
+            df_all["Simple Bouger Anomaly Optimal"] = df_all["FAA"] - df_all["Bouger Correction Optimal"]
+            df_all["Complete Bouger Anomaly Optimal"] = df_all["Simple Bouger Anomaly Optimal"] + df_all["Koreksi Medan"]
+            
+            # Update juga dengan densitas dari Parasnis (jika berbeda)
+            if 'slope' in locals() and not np.isnan(slope):
+                parasnis_density = slope / 0.04192
+                df_all["Bouger Correction Parasnis"] = 0.04192 * parasnis_density * df_all["Elev"]
+                df_all["Simple Bouger Anomaly Parasnis"] = df_all["FAA"] - df_all["Bouger Correction Parasnis"]
+                df_all["Complete Bouger Anomaly Parasnis"] = df_all["Simple Bouger Anomaly Parasnis"] + df_all["Koreksi Medan"]
+            
+            # Tampilkan plot validasi
+            fig_validation = plot_density_validation(df_all, optimal_density)
+            if fig_validation:
+                st.pyplot(fig_validation)
+            
+            # Opsi untuk menggunakan densitas yang berbeda
+            st.subheader("⚙️ Pilih Densitas untuk Perhitungan Final")
+            
+            col1, col2, col3 = st.columns(3)
+            with col1:
+                use_optimal = st.checkbox("Gunakan densitas optimal", value=True)
+            with col2:
+                use_parasnis = st.checkbox("Gunakan densitas Parasnis", value=False)
+            with col3:
+                custom_density = st.number_input("Densitas kustom (g/cm³)", 
+                                                value=float(optimal_density), 
+                                                min_value=1.0, max_value=4.0, step=0.01)
+            
+            if use_optimal:
+                final_density = optimal_density
+                st.success(f"Menggunakan densitas optimal: {final_density:.3f} g/cm³")
+            elif use_parasnis and 'slope' in locals() and not np.isnan(slope):
+                final_density = parasnis_density
+                st.info(f"Menggunakan densitas dari Parasnis: {final_density:.3f} g/cm³")
+            else:
+                final_density = custom_density
+                st.warning(f"Menggunakan densitas kustom: {final_density:.3f} g/cm³")
+            
+            # Perhitungan final dengan densitas terpilih
+            df_all["Bouger Correction Final"] = 0.04192 * final_density * df_all["Elev"]
+            df_all["Simple Bouger Anomaly Final"] = df_all["FAA"] - df_all["Bouger Correction Final"]
+            df_all["Complete Bouger Anomaly Final"] = df_all["Simple Bouger Anomaly Final"] + df_all["Koreksi Medan"]
+            
+            # Tampilkan statistik
+            st.subheader("📈 Statistik Anomali Bouguer Final")
+            
+            col1, col2, col3, col4 = st.columns(4)
+            with col1:
+                st.metric("Min CBA", f"{df_all['Complete Bouger Anomaly Final'].min():.1f} mGal")
+            with col2:
+                st.metric("Max CBA", f"{df_all['Complete Bouger Anomaly Final'].max():.1f} mGal")
+            with col3:
+                st.metric("Mean CBA", f"{df_all['Complete Bouger Anomaly Final'].mean():.1f} mGal")
+            with col4:
+                st.metric("Std Dev CBA", f"{df_all['Complete Bouger Anomaly Final'].std():.1f} mGal")
+            
+            # Plot distribusi CBA final
+            fig_cba_final, ax_cba_final = plt.subplots(figsize=(10, 5))
+            ax_cba_final.hist(df_all['Complete Bouger Anomaly Final'], bins=30, 
+                             alpha=0.7, edgecolor='black', color='green')
+            ax_cba_final.axvline(df_all['Complete Bouger Anomaly Final'].mean(), 
+                               color='red', linestyle='--',
+                               label=f'Mean: {df_all["Complete Bouger Anomaly Final"].mean():.1f} mGal')
+            ax_cba_final.set_xlabel('Complete Bouguer Anomaly (mGal)')
+            ax_cba_final.set_ylabel('Frequency')
+            ax_cba_final.set_title(f'Distribusi CBA Final (ρ = {final_density:.3f} g/cm³)')
+            ax_cba_final.legend()
+            ax_cba_final.grid(True, alpha=0.3)
+            st.pyplot(fig_cba_final)
+            
+            # Simpan densitas final ke session state untuk digunakan di tab lain
+            st.session_state.final_density = final_density
+            st.session_state.density_results = density_results
+            
+    else:
+        st.warning("Harap proses data terlebih dahulu di tab utama.")
+
+# Tab 5: Data Export (diperbarui)
+with tab5:
+    st.subheader("Download Hasil Perhitungan")
+    
+    # Tambahkan informasi densitas ke file export jika ada
+    if 'final_density' in st.session_state:
+        st.info(f"Densitas yang digunakan: {st.session_state.final_density:.3f} g/cm³")
+    
+    col1, col2, col3 = st.columns(3)
+    
+    with col1:
+        csv = df_all.to_csv(index=False)
+        st.download_button(
+            label="Download Processed Data (.csv)",
+            data=csv.encode('utf-8'),
+            file_name="autograv_results.csv",
+            mime="text/csv"
+        )
+    
+    with col2:
+        if station_details:
+            details_df = pd.DataFrame(station_details)
+            details_csv = details_df.to_csv(index=False)
+            st.download_button(
+                label="Download Station Details (.csv)",
+                data=details_csv.encode('utf-8'),
+                file_name="autograv_station_details.csv",
+                mime="text/csv"
+            )
+    
+    with col3:
+        # Export hasil analisis densitas jika ada
+        if 'density_results' in st.session_state:
+            density_df = st.session_state.density_results
+            density_csv = density_df.to_csv(index=False)
+            st.download_button(
+                label="Download Density Analysis (.csv)",
+                data=density_csv.encode('utf-8'),
+                file_name="autograv_density_analysis.csv",
+                mime="text/csv"
+            )
+    
+    # Tampilkan summary
+    st.info("### Ringkasan Hasil")
+    
+    if 'final_density' in st.session_state:
+        st.write(f"- **Densitas yang digunakan:** {st.session_state.final_density:.3f} g/cm³")
+    
+    if 'slope' in locals() and not np.isnan(slope):
+        st.write(f"- **Gradien Parasnis (K):** {slope:.5f}")
+        st.write(f"- **R² Parasnis:** {r_squared:.3f}")
+    
+    st.write(f"- **Total stasiun diproses:** {len(df_all)}")
+    st.write(f"- **Total sheets:** {len(all_dfs)}")
+    
+    st.success("Processing Sudah Selesai, Download data hasil")
+
+# ============================================================
+# TAMBAHAN: Fungsi untuk debugging gradien tinggi
+# ============================================================
+
+def debug_high_gradient(df_all, debug_mode=True):
+    """
+    Fungsi khusus untuk debugging gradien Parasnis yang terlalu tinggi.
+    """
+    if debug_mode:
+        st.subheader("🔍 Debugging Gradien Parasnis Tinggi")
+        
+        # Analisis penyebab
+        causes = []
+        
+        # 1. Cek range data
+        if 'X-Parasnis' in df_all.columns and 'Y-Parasnis' in df_all.columns:
+            x_range = df_all['X-Parasnis'].max() - df_all['X-Parasnis'].min()
+            y_range = df_all['Y-Parasnis'].max() - df_all['Y-Parasnis'].min()
+            
+            ratio = y_range / x_range if x_range != 0 else float('inf')
+            
+            if ratio > 1000:
+                causes.append(f"Range Y ({y_range:.1f}) >> Range X ({x_range:.1f}), ratio: {ratio:.0f}")
+        
+        # 2. Cek outlier
+        from scipy import stats
+        if 'Y-Parasnis' in df_all.columns:
+            z_scores = np.abs(stats.zscore(df_all['Y-Parasnis'].dropna()))
+            outlier_count = np.sum(z_scores > 3)
+            if outlier_count > 0:
+                causes.append(f"{outlier_count} outlier dalam Y-Parasnis (|z| > 3)")
+        
+        # 3. Cek konsistensi base station
+        if 'Nama' in df_all.columns:
+            base_name = df_all['Nama'].iloc[0]
+            base_readings = df_all[df_all['Nama'] == base_name]
+            if len(base_readings) > 1:
+                g_variation = base_readings['G_read (mGal)'].std()
+                if g_variation > 1.0:
+                    causes.append(f"Base station {base_name} tidak konsisten (std={g_variation:.2f} mGal)")
+        
+        # 4. Tampilkan penyebab
+        if causes:
+            st.warning("**Penyebab potensial gradien tinggi:**")
+            for cause in causes:
+                st.write(f"- {cause}")
+            
+            # Solusi
+            st.info("**Solusi yang dicoba:**")
+            st.write("1. Gunakan metode Nettleton untuk validasi densitas")
+            st.write("2. Periksa konsistensi pengukuran base station")
+            st.write("3. Cek koreksi medan (TC) - apakah terlalu besar/kecil?")
+            st.write("4. Verifikasi nilai G_base yang digunakan")
+            
+            return True
+        
+    return False
+
+# Panggil fungsi debug setelah perhitungan Parasnis
+if run and 'slope' in locals() and not np.isnan(slope):
+    if abs(slope) > 0.15:  # Jika gradien > 0.15
+        debug_high_gradient(df_all, debug_mode)
+        
 # ============================================================
 # UI STREAMLIT
 # ============================================================
@@ -1138,6 +1819,7 @@ if run:
                 )
         
         st.info("Processing Sudah Selesai, Download data hasil")
+
 
 
 
