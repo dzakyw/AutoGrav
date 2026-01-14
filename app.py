@@ -9,9 +9,7 @@ from PIL import Image
 import os
 import hashlib
 
-# ============================================================
-# IMPORT UNTUK PLOT INTERAKTIF - GANTI CARTOPY DENGAN PLOTLY
-# ============================================================
+# - Import Plotly
 try:
     import plotly.graph_objects as go
     import plotly.express as px
@@ -29,15 +27,12 @@ try:
 except ImportError:
     FOLIUM_AVAILABLE = False
    
-# ---------------------------------------------
-# 1. HASH FUNCTION
-# ---------------------------------------------
+#Fungsi Hash Untuk Login
 def hash_password(password: str):
     return hashlib.sha256(password.encode()).hexdigest()
 
-# ---------------------------------------------
-# 2. USER DATABASE (EDIT SESUAI KEBUTUHAN)
-# ---------------------------------------------
+#-- Database username & password
+
 USER_DB = {
     "admin": hash_password("admin"),
     "user": hash_password("12345"),
@@ -49,17 +44,15 @@ USER_ROLES = {
     "user": "viewer",
 }
 
-# ---------------------------------------------
-# 3. AUTHENTICATION CHECK
-# ---------------------------------------------
+#Autentikasi
+
 def authenticate(username, password):
     if username in USER_DB:
         return USER_DB[username] == hash_password(password)
     return False
 
-# ---------------------------------------------
-# 4. LOGIN PAGE (BLOCKING)
-# ---------------------------------------------
+#Login Page
+
 def login_page():
     st.title("Welcome to Auto Grav")
     username = st.text_input("Username")
@@ -76,17 +69,14 @@ def login_page():
             st.error("Invalid username or password")
     st.stop()
 
-# ---------------------------------------------
-# 5. LOGOUT BUTTON
-# ---------------------------------------------
+#Logout Button
 def logout_button():
     if st.sidebar.button("Logout"):
         st.session_state.clear()
         st.rerun()
 
-# ---------------------------------------------
-# 6. LOGIN WRAPPER
-# ---------------------------------------------
+##Login Page
+
 def require_login():
     if "logged_in" not in st.session_state or not st.session_state.logged_in:
         login_page()
@@ -95,9 +85,8 @@ def require_login():
 
 require_login()
 
-# -----------------------
-# UTM conversion (Redfearn)
-# -----------------------
+#Konversi UTM 
+
 def latlon_to_utm_redfearn(lat, lon):
     lat = np.asarray(lat, dtype=float)
     lon = np.asarray(lon, dtype=float)
@@ -165,9 +154,7 @@ def load_geotiff_without_tfw(file):
     })
     return df
 
-# -------------------------------------------------------------
-# UNIVERSAL DEM LOADER (CSV / TXT / XYZ / TIFF / TIFF+TFW)
-# -------------------------------------------------------------
+#DEM LOADER (.xyz, .csv, atau .txt)
 def load_dem(file):
     name = file.name.lower()
     
@@ -191,11 +178,9 @@ def load_dem(file):
     if name.endswith((".tif", ".tiff")):
         return load_geotiff_without_tfw(file)
     
-    raise ValueError("DEM format unsupported. Use: CSV, XYZ, TXT, TIFF")
+    raise ValueError("DEM format unsupported. Use: CSV, XYZ, TXT")
 
-# -----------------------
-# Drift solver - DIPERBAIKI
-# -----------------------
+## Perhitungan Drift
 def compute_drift(df, G_base, debug_mode=False):
     df = df.copy()
     df["Time"] = pd.to_datetime(df["Time"], format="%H:%M:%S", errors="raise")
@@ -214,7 +199,6 @@ def compute_drift(df, G_base, debug_mode=False):
         (duplicate_check['Elev'] > 1)
     ]
     
-    # PERBAIKAN: Gunakan parameter debug_mode, bukan st.session_state
     if not problematic_stations.empty and debug_mode:
         st.warning(f"⚠️ Found stations with same name but different coordinates: {problematic_stations.index.tolist()}")
     
@@ -256,9 +240,8 @@ def compute_drift(df, G_base, debug_mode=False):
         Gmap[st] = float(x[idx])
     
     return Gmap, D
-# -----------------------
-# Basic corrections
-# -----------------------
+
+#Koreksi Latitude
 def latitude_correction(lat):
     phi = np.radians(lat)
     s = np.sin(phi); s2 = np.sin(2*phi)
@@ -267,9 +250,8 @@ def latitude_correction(lat):
 def free_air(elev):
     return 0.3086 * elev
 
-# ============================================================
-# KONSTANTA & KERNEL DASAR SESUAI PAPER
-# ============================================================
+#Konstanta Untuk Dari Paper OSS
+
 G = 6.67430e-11           # m^3 kg^-1 s^-2
 RHO = 2670.0              # kg/m^3 (2.67 g/cm^3)
 NANO_TO_MGAL = 1e-6       # 1 nGal = 1e-6 mGal
@@ -321,22 +303,21 @@ def optimized_elevation(z_avg, deviations, R1, R2, Delta_theta, r_points):
     
     return np.sqrt(z_prime_sq)
 
-# ============================================================
-# CLASS OSSTerrainCorrector - VERSI DIPERBAIKI
-# ============================================================
+#Class untuk OSS Koreksi Medan
+
 class OSSTerrainCorrector:
     def __init__(self, dem_df, station_coords, params=None):
         self.e0, self.n0, self.z0 = station_coords
         self.dem_df = dem_df.copy()
         
         self.params = {
-            'max_radius': 4500.0,
+            'max_radius': 5000.0,
             'tolerance_nGal': 1.0,
             'threshold_mGal': 0.1,
             'theta_step': 1.0,
             'r_step_near': 10.0,
             'r_step_far': 50.0,
-            'min_points_per_sector': 10,
+            'min_points_per_sector': 15,
             'use_optimized_elevation': True,
             'debug': False,
             'density': RHO
@@ -345,10 +326,10 @@ class OSSTerrainCorrector:
         if params:
             self.params.update(params)
         
-        # ============================================================
-        # PERBAIKAN KRITIS: Definisi z yang BENAR
+        
+        #Definisi z yang BENAR
         # z = elevasi_DEM - elevasi_stasiun
-        # ============================================================
+      
         dx = self.dem_df['Easting'] - self.e0
         dy = self.dem_df['Northing'] - self.n0
         
@@ -356,7 +337,7 @@ class OSSTerrainCorrector:
         self.theta_rad = np.arctan2(dy, dx)
         self.theta_deg = np.degrees(self.theta_rad) % 360.0
         
-        # INI YANG BENAR: z = h_dem - h_station
+        # z = h_dem - h_station
         self.z_rel = self.dem_df['Elev'] - self.z0
         
         if self.params.get('debug', False):
@@ -558,7 +539,7 @@ class OSSTerrainCorrector:
     def calculate_terrain_correction(self):
         """Main method to calculate terrain correction"""
         if self.params.get('debug', False):
-            st.write(f"🚀 Starting OSS calculation for station at ({self.e0:.1f}, {self.n0:.1f})")
+            st.write(f"Starting OSS calculation for station at ({self.e0:.1f}, {self.n0:.1f})")
         
         total_tc, subsectors = self._process_sector(
             theta1=0.0,
@@ -570,13 +551,13 @@ class OSSTerrainCorrector:
         # Validasi: TC harus positif
         if total_tc < 0:
             if self.params.get('debug', False):
-                st.warning(f"⚠️ Negative TC ({total_tc:.3f} mGal). Taking absolute value.")
+                st.warning(f"Negative TC ({total_tc:.3f} mGal). Taking absolute value.")
             total_tc = abs(total_tc)
         
         if self.params.get('debug', False):
-            st.write(f"✅ Total TC: {total_tc:.3f} mGal")
+            st.write(f"Total TC: {total_tc:.3f} mGal")
             if subsectors:
-                st.write(f"📊 Number of subsectors: {len(subsectors)}")
+                st.write(f"Number of subsectors: {len(subsectors)}")
         
         return total_tc, subsectors
 
@@ -595,21 +576,20 @@ def calculate_oss_correction(dem_df, station_row, params=None):
     
     return tc_value
 
-# ============================================================
-# FUNGSI VALIDASI DAN PLOTTING
-# ============================================================
+# Fungsi Untuk Validasi dan Plotting
+
 def validate_tc_value(tc_value, station_name, debug=False):
     """Validasi nilai TC yang reasonable"""
     validated_tc = tc_value
     
     if tc_value < -0.5:
         if debug:
-            st.warning(f"Station {station_name}: TC sangat negatif ({tc_value:.3f} mGal)")
+            st.warning(f"Station {station_name}: TC bernilai negatif ({tc_value:.3f} mGal)")
         validated_tc = max(tc_value, 0.0)
     
     elif tc_value > 50.0:
         if debug:
-            st.warning(f"Station {station_name}: TC sangat besar ({tc_value:.1f} mGal)")
+            st.warning(f"Station {station_name}: TC terlalu besar ({tc_value:.1f} mGal)")
         validated_tc = min(tc_value, 100.0)
     
     elif 0 <= tc_value < 0.01:
@@ -619,7 +599,7 @@ def validate_tc_value(tc_value, station_name, debug=False):
     return validated_tc
 
 def plot_dem_elevation(dem_df, stations_df=None):
-    """Plot elevation dari DEM dengan overlay stasiun"""
+
     x_dem = dem_df["Easting"]
     y_dem = dem_df["Northing"]
     z_dem = dem_df["Elev"]
@@ -640,9 +620,9 @@ def plot_dem_elevation(dem_df, stations_df=None):
     
     ax.set_xlabel('Easting (m)')
     ax.set_ylabel('Northing (m)')
-    ax.set_title('Topography from DEM with Gravity Stations')
+    ax.set_title('Topografi DEM dan Stasiun Pengukuran')
     cbar = fig.colorbar(contour, ax=ax)
-    cbar.set_label('Elevation (m)')
+    cbar.set_label('Elevasi (m)')
     
     if stations_df is not None:
         ax.legend()
@@ -701,12 +681,12 @@ def create_interactive_scatter(df, x_col, y_col, color_col, title, hover_cols=No
     
     return fig
 
-# ============================================================
+
 # TEST FUNCTION UNTUK VALIDASI
-# ============================================================
+
 def run_oss_test():
     """Test OSS dengan data sederhana untuk validasi"""
-    st.subheader("🧪 OSS Algorithm Test")
+    st.subheader("OSS Algorithm Test")
     
     # Buat data test
     test_dem_data = {
@@ -761,9 +741,9 @@ def run_oss_test():
     
     scatter = axes[1].scatter(results_df['Elevation'], results_df['TC'], 
                              c=results_df['Threshold'], cmap='viridis', s=100)
-    axes[1].set_xlabel('Station Elevation (m)')
-    axes[1].set_ylabel('Terrain Correction (mGal)')
-    axes[1].set_title('TC vs Elevation (Should correlate)')
+    axes[1].set_xlabel('Elevasi Stasiun (m)')
+    axes[1].set_ylabel('Koreksi Medan (mGal)')
+    axes[1].set_title('Koreksi medan vs Elevasi (Should correlate)')
     axes[1].grid(True, alpha=0.3)
     plt.colorbar(scatter, ax=axes[1], label='Threshold (mGal)')
     
@@ -799,28 +779,28 @@ st.markdown(
 # ============================================================
 st.sidebar.header("Input Files")
 grav = st.sidebar.file_uploader("Input Gravity Multi-Sheets (.xlsx)", type=["xlsx"])
-demf = st.sidebar.file_uploader("Upload DEM (CSV/XYZ/TIFF)", type=["csv","txt","xyz","tif","tiff"])
+demf = st.sidebar.file_uploader("Upload DEM (CSV/XYZ/TXT)", type=["csv","txt","xyz"])
 kmf = st.sidebar.file_uploader("Koreksi Medan manual (optional)", type=["csv","xlsx"])
 G_base = st.sidebar.number_input("G Absolute di Base", value=0.0)
 
 # Test button
-if st.sidebar.button("🧪 Run OSS Test"):
+if st.sidebar.button("Run OSS Test"):
     run_oss_test()
 
 st.sidebar.subheader("Interactive Plot Options")
 enable_interactive = st.sidebar.checkbox("Enable Interactive Plots", value=True)
 
-# ============================================================
+
 # PARAMETER OSS
-# ============================================================
+
 st.sidebar.subheader("OSS Algorithm Parameters")
-debug_mode = st.sidebar.checkbox("🛠️ Debug Mode", value=False)
+debug_mode = st.sidebar.checkbox("Debug Mode", value=False)
 st.session_state.debug_mode = debug_mode
 
 threshold_mgal = st.sidebar.slider(
     "Threshold (mGal) for subdivision",
     min_value=0.001,
-    max_value=0.5,
+    max_value=0.01,
     value=0.05,
     step=0.001,
     help="Start with 0.05 mGal for optimal results"
@@ -829,7 +809,7 @@ threshold_mgal = st.sidebar.slider(
 max_radius = st.sidebar.number_input(
     "Maximum Radius (m)",
     value=4500,
-    step=500,
+    step=100,
     help="Jangkauan maksimum untuk koreksi medan"
 )
 
@@ -850,20 +830,20 @@ use_optimized_elev = st.sidebar.checkbox(
 min_points_sector = st.sidebar.number_input(
     "Minimum points per sector",
     min_value=1,
-    max_value=100,
+    max_value=70,
     value=10,
     help="Sector dengan points < ini tidak di-subdivide"
 )
 
-run = st.sidebar.button("🚀 Run Processing", type="primary")
+run = st.sidebar.button("Run Processing", type="primary")
 
 st.sidebar.subheader("Contoh File Input")
 st.sidebar.write("[Contoh Data Input Gravity](https://github.com/dzakyw/AutoGrav/raw/9bb43e1559c823350f2371360309d84eaab5ea38/sample_gravity.xlsx)")
 st.sidebar.write("[Contoh DEM dengan format .txt](https://github.com/dzakyw/AutoGrav/raw/9bb43e1559c823350f2371360309d84eaab5ea38/sample_dem.csv)")
 
-# ============================================================
+
 # MAIN PROCESSING
-# ============================================================
+
 if run:
     if grav is None:
         st.error("Upload file gravity .xlsx (multi-sheet).")
@@ -873,7 +853,7 @@ if run:
     if demf:
         try:
             dem = load_dem(demf)
-            st.success(f"✅ DEM loaded: {len(dem):,} points.")
+            st.success(f"DEM loaded: {len(dem):,} points.")
             
             col1, col2 = st.columns(2)
             with col1:
@@ -900,7 +880,7 @@ if run:
         if {"Nama","Koreksi_Medan"}.issubset(km.columns):
             km["Koreksi_Medan"] = pd.to_numeric(km["Koreksi_Medan"], errors="coerce")
             km_map = km.set_index("Nama")["Koreksi_Medan"].to_dict()
-            st.info(f"✅ Manual terrain correction loaded: {len(km_map)} stations")
+            st.info(f"Manual terrain correction loaded: {len(km_map)} stations")
         else:
             st.warning("File koreksi medan manual harus kolom: Nama, Koreksi_Medan. Ignored.")
     
@@ -1035,11 +1015,11 @@ if run:
     df_all = pd.concat(all_dfs, ignore_index=True)
     elapsed = time.time() - t0
     
-    st.success(f"✅ Processing completed in {elapsed:.1f} seconds")
+    st.success(f"Processing completed in {elapsed:.1f} seconds")
     
     if tc_stats:
         tc_values = np.array(tc_stats)
-        st.subheader("📊 Terrain Correction Statistics")
+        st.subheader("Terrain Correction Statistics")
         
         col1, col2, col3, col4 = st.columns(4)
         with col1:
@@ -1079,14 +1059,14 @@ if run:
     df_all["Simple Bouger Anomaly"] = df_all["FAA"] - df_all["Bouger Correction"]
     df_all["Complete Bouger Anomaly"] = df_all["Simple Bouger Anomaly"] + df_all["Koreksi Medan"]
     
-    st.subheader("📋 Processed Results")
+    st.subheader("Hasil Yang Diproses")
     
-    with st.expander("View Data Preview", expanded=True):
+    with st.expander("Lihat Data Preview", expanded=True):
         st.dataframe(df_all.head(20))
         st.write(f"**Total rows processed:** {len(df_all)}")
         st.write(f"**Total sheets processed:** {len(all_dfs)}")
     
-    st.subheader("📈 Visualization")
+    st.subheader("Visualisasi Hasil")
     
     tab1, tab2, tab3, tab4 = st.tabs(["Parasnis Plot", "Topography", "CBA Map", "Data Export"])
     
@@ -1135,7 +1115,7 @@ if run:
             st.warning("No data available for CBA plot.")
     
     with tab4:
-        st.subheader("💾 Download Results")
+        st.subheader("Download Hasil Perhitungan")
         
         col1, col2 = st.columns(2)
         
@@ -1159,5 +1139,6 @@ if run:
                     mime="text/csv"
                 )
         
-        st.info("✅ Processing complete! Download your results above.")
+        st.info("Processing Sudah Selesai, Download data hasil")
+
 
