@@ -800,7 +800,7 @@ st.session_state.debug_mode = debug_mode
 threshold_mgal = st.sidebar.slider(
     "Threshold (mGal) for subdivision",
     min_value=0.001,
-    max_value=0.01,
+    max_value=0.1,
     value=0.05,
     step=0.001,
     help="Start with 0.05 mGal for optimal results"
@@ -1140,5 +1140,6 @@ if run:
                 )
         
         st.info("Processing Sudah Selesai, Download data hasil")
+
 
 
