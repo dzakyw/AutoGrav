@@ -239,8 +239,8 @@ def compute_drift(df, G_base, debug_mode=False):
 # KOREKSI LINTANG (LATITUDE CORRECTION) YANG BENAR
 def latitude_correction(lat):
     phi = np.radians(lat)
-    s = np.sin(phi); s2 = np.sin(2*phi)
-    return 978031.846 * (1 + 0.0053024 * s*s - 0.0000059 * s2*s2)
+    s = np.sin(phi); s2 = np.sin(phi)
+    return 978031.846 * (1 + 0.0053024 * s*s - 0.00002346259 * s2*s2*s2*s2)
 
 def free_air(elev):
     """Free-air correction: 0.3086 * elevation (m)"""
@@ -1139,5 +1139,6 @@ if run:
                 )
         
         st.info("Processing Sudah Selesai, Download data hasil")
+
 
 
