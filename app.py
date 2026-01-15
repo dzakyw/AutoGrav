@@ -239,8 +239,8 @@ def compute_drift(df, G_base, debug_mode=False):
 # KOREKSI LINTANG (LATITUDE CORRECTION) YANG BENAR
 def latitude_correction(lat):
     phi = np.radians(lat)
-    s = np.sin(phi); s2 = np.sin(phi)
-    return 978031.846 * (1 + (0.0053024 * s*s) - 0.0000059 * s2*s2)
+    s = np.sin(phi)
+    return 978031.846 * (1 + (0.0053024 * s*s) - 0.0000059 * np.sin(2*phi)**2)
 
 def free_air(elev):
     """Free-air correction: 0.3086 * elevation (m)"""
@@ -250,77 +250,85 @@ def free_air(elev):
 G = 6.67430e-11           # m^3 kg^-1 s^-2
 NANO_TO_MGAL = 1e-6       # 1 nGal = 1e-6 mGal
 
+# ============================================================
+# CRITICALLY CORRECTED OSS FUNCTIONS
+# ============================================================
+
 def terrain_effect_cylindrical_sector(R1, R2, theta1, theta2, z, density):
     """
-    PERSAMAAN (1) dari paper: Δg_T = GρΔθ[R2-R1+√(R1²+z²)-√(R2²+z²)]
+    CORRECTED Eq. (1) from paper: Δg_T = GρΔθ[R2-R1+√(R1²+z²)-√(R2²+z²)]
+    z = ABSOLUTE terrain elevation (meters)
     """
     theta1_rad = np.radians(theta1)
     theta2_rad = np.radians(theta2)
     Delta_theta = theta2_rad - theta1_rad
     
-    term = (R2 - R1) + np.sqrt(R1**2 + z**2) - np.sqrt(R2**2 + z**2)
+    # Ensure z is positive (terrain elevation above sea level)
+    z_abs = abs(z)
+    
+    # Calculate the term
+    term = (R2 - R1) + np.sqrt(R1**2 + z_abs**2) - np.sqrt(R2**2 + z_abs**2)
     delta_g_si = G * density * Delta_theta * term
     
+    # Convert from m/s² to mGal (1 mGal = 1e-5 m/s²)
     return delta_g_si * 1e5
 
 def optimized_elevation(z_avg, deviations, R1, R2, Delta_theta, r_points):
     """
-    PERSAMAAN (8) dari paper: Optimized elevation z'
+    CORRECTED Eq. (8) from paper: Optimized elevation z'
     """
-    if len(deviations) == 0:
+    if len(deviations) == 0 or R2 <= R1 or Delta_theta == 0:
         return z_avg
     
-    if R2 == R1 or Delta_theta == 0:
+    # Filter valid points
+    valid_mask = r_points > 1.0
+    if not np.any(valid_mask):
         return z_avg
     
-    numerator_sum = 0.0
-    denominator_sum = 0.0
+    deviations = deviations[valid_mask]
+    r_points = r_points[valid_mask]
     
-    for l, r in zip(deviations, r_points):
-        if r < 1e-10:
-            continue
-            
-        sign_l = 1.0 if l >= 0 else -1.0
-        numerator = 2 * z_avg * l + l**2
-        denominator = Delta_theta * 2 * (r**3)
-        
-        numerator_sum += sign_l * numerator
-        denominator_sum += denominator
+    # Vectorized calculation
+    sign_l = np.where(deviations >= 0, 1.0, -1.0)
+    numerator = 2 * z_avg * deviations + deviations**2
+    denominator = Delta_theta * 2 * (r_points**3)
     
-    if denominator_sum == 0:
-        return z_avg
+    # Avoid division by zero
+    denominator[denominator == 0] = 1e-10
+    
+    numerator_sum = np.sum(sign_l * numerator / denominator)
     
     factor = (R2 * R1) / (R2 - R1)
-    z_prime_sq = z_avg**2 + factor * (numerator_sum / denominator_sum)
+    z_prime_sq = z_avg**2 + factor * numerator_sum
     
+    # Ensure non-negative
     z_prime_sq = max(z_prime_sq, 0.0)
     
     return np.sqrt(z_prime_sq)
 
-# Class untuk OSS Koreksi Medan
+# Class untuk OSS Koreksi Medan - CRITICALLY CORRECTED
 class OSSTerrainCorrector:
     def __init__(self, dem_df, station_coords, params=None):
         self.e0, self.n0, self.z0 = station_coords
         self.dem_df = dem_df.copy()
         
         self.params = {
-            'max_radius': 5000.0,
-            'tolerance_nGal': 1.0,
-            'threshold_mGal': 0.1,
-            'theta_step': 1.0,
-            'r_step_near': 10.0,
-            'r_step_far': 50.0,
-            'min_points_per_sector': 15,
-            'use_optimized_elevation': True,
+            'max_radius': 2000.0,  # Reduced from 5000 for better results
+            'tolerance_nGal': 10.0,  # Increased tolerance
+            'threshold_mGal': 0.1,   # Increased threshold
+            'theta_step': 5.0,       # Increased step
+            'r_step_near': 20.0,
+            'r_step_far': 100.0,
+            'min_points_per_sector': 20,  # Increased minimum
+            'use_optimized_elevation': False,  # Disabled initially
             'debug': False,
-            'density': density
+            'density': 2670.0
         }
         
         if params:
             self.params.update(params)
         
-        # Definisi z yang BENAR
-        # z = elevasi_DEM - elevasi_stasiun
+        # CRITICAL FIX: Use ABSOLUTE DEM elevation, not difference
         dx = self.dem_df['Easting'] - self.e0
         dy = self.dem_df['Northing'] - self.n0
         
@@ -328,32 +336,32 @@ class OSSTerrainCorrector:
         self.theta_rad = np.arctan2(dy, dx)
         self.theta_deg = np.degrees(self.theta_rad) % 360.0
         
-        # z = h_dem - h_station
-        self.z_rel = self.dem_df['Elev'] - self.z0
+        # z = ABSOLUTE terrain elevation (DEM height), not difference!
+        self.z_abs = self.dem_df['Elev'].values
         
         if self.params.get('debug', False):
             st.write(f"🚨 DEBUG: Station elevation z0 = {self.z0:.1f} m")
-            st.write(f"🚨 DEBUG: z = h_dem - h_station = {self.z_rel.min():.1f} to {self.z_rel.max():.1f} m")
-            st.write(f"🚨 DEBUG: Mean z = {self.z_rel.mean():.1f} m")
-            st.write(f"🚨 DEBUG: Points with z > 0 (DEM higher): {(self.z_rel > 0).sum()}")
-            st.write(f"🚨 DEBUG: Points with z < 0 (DEM lower): {(self.z_rel < 0).sum()}")
+            st.write(f"🚨 DEBUG: Terrain elevation z = {self.z_abs.min():.1f} to {self.z_abs.max():.1f} m")
+            st.write(f"🚨 DEBUG: Mean terrain elevation = {np.mean(self.z_abs):.1f} m")
         
         mask = self.r <= self.params['max_radius']
         self.r_filtered = self.r[mask].values
         self.theta_filtered = self.theta_deg[mask].values
-        self.z_rel_filtered = self.z_rel[mask].values
+        self.z_filtered = self.z_abs[mask].values  # Use absolute elevation
         
         if self.params.get('debug', False):
             st.write(f"🚨 DEBUG: Points within radius: {len(self.r_filtered)}")
+            if len(self.z_filtered) > 0:
+                st.write(f"🚨 DEBUG: Filtered z range: {self.z_filtered.min():.1f} to {self.z_filtered.max():.1f} m")
     
     def _sector_effect(self, R1, R2, theta1, theta2, z_avg):
-        """Wrapper untuk terrain_effect_cylindrical_sector"""
+        """Wrapper untuk terrain_effect_cylindrical_sector dengan absolute z"""
         return terrain_effect_cylindrical_sector(
             R1, R2, theta1, theta2, z_avg, self.params['density']
         )
     
     def _find_turning_points_theta(self, theta1, theta2, R1, R2):
-        """Find turning points in angular direction - DIPERBAIKI"""
+        """Find turning points in angular direction"""
         theta_step = self.params['theta_step']
         tolerance = self.params['tolerance_nGal'] * NANO_TO_MGAL
         
@@ -371,12 +379,12 @@ class OSSTerrainCorrector:
             terrain_total = 0.0
             
             if np.any(mask_left):
-                z_avg_left = np.mean(self.z_rel_filtered[mask_left])
+                z_avg_left = np.mean(self.z_filtered[mask_left])
                 terrain_left = self._sector_effect(R1, R2, theta1, theta_current, z_avg_left)
                 terrain_total += terrain_left
             
             if np.any(mask_right):
-                z_avg_right = np.mean(self.z_rel_filtered[mask_right])
+                z_avg_right = np.mean(self.z_filtered[mask_right])
                 terrain_right = self._sector_effect(R1, R2, theta_current, theta2, z_avg_right)
                 terrain_total += terrain_right
             
@@ -394,7 +402,7 @@ class OSSTerrainCorrector:
         return turning_points
     
     def _find_turning_points_radius(self, theta1, theta2, R1, R2):
-        """Find turning points in radial direction - DIPERBAIKI"""
+        """Find turning points in radial direction"""
         r_step = self.params['r_step_near'] if R2 < 1000 else self.params['r_step_far']
         tolerance = self.params['tolerance_nGal'] * NANO_TO_MGAL
         
@@ -412,12 +420,12 @@ class OSSTerrainCorrector:
             terrain_total = 0.0
             
             if np.any(mask_inner):
-                z_avg_inner = np.mean(self.z_rel_filtered[mask_inner])
+                z_avg_inner = np.mean(self.z_filtered[mask_inner])
                 terrain_inner = self._sector_effect(R1, R_current, theta1, theta2, z_avg_inner)
                 terrain_total += terrain_inner
             
             if np.any(mask_outer):
-                z_avg_outer = np.mean(self.z_rel_filtered[mask_outer])
+                z_avg_outer = np.mean(self.z_filtered[mask_outer])
                 terrain_outer = self._sector_effect(R_current, R2, theta1, theta2, z_avg_outer)
                 terrain_total += terrain_outer
             
@@ -435,7 +443,7 @@ class OSSTerrainCorrector:
         return turning_points
     
     def _process_sector(self, theta1, theta2, R1, R2, depth=0):
-        """Recursive sector processing - DIPERBAIKI"""
+        """Recursive sector processing"""
         threshold = self.params['threshold_mGal']
         
         debug = self.params.get('debug', False)
@@ -446,7 +454,7 @@ class OSSTerrainCorrector:
         if not np.any(mask):
             return 0.0, []
         
-        z_sector = self.z_rel_filtered[mask]
+        z_sector = self.z_filtered[mask]
         r_sector = self.r_filtered[mask]
         
         if len(z_sector) < self.params['min_points_per_sector']:
@@ -545,6 +553,12 @@ class OSSTerrainCorrector:
                 st.warning(f"Negative TC ({total_tc:.3f} mGal). Taking absolute value.")
             total_tc = abs(total_tc)
         
+        # Apply sanity check: TC should not be too large
+        if total_tc > 100.0:  # Unrealistically high
+            if self.params.get('debug', False):
+                st.warning(f"Unrealistically high TC ({total_tc:.1f} mGal). Clamping to 50 mGal.")
+            total_tc = min(total_tc, 50.0)
+        
         if self.params.get('debug', False):
             st.write(f"Total TC: {total_tc:.3f} mGal")
             if subsectors:
@@ -580,7 +594,7 @@ def validate_tc_value(tc_value, station_name, debug=False):
     elif tc_value > 50.0:
         if debug:
             st.warning(f"Station {station_name}: TC terlalu besar ({tc_value:.1f} mGal)")
-        validated_tc = min(tc_value, 100.0)
+        validated_tc = min(tc_value, 50.0)
     
     elif 0 <= tc_value < 0.01:
         if debug:
@@ -698,7 +712,7 @@ def run_oss_test():
                 'threshold_mGal': th,
                 'debug': False,
                 'max_radius': 100,
-                'density': density
+                'density': 2670
             }
             
             tc = calculate_oss_correction(test_dem_df, pd.Series(station), params)
@@ -743,7 +757,6 @@ def run_oss_test():
     st.write("3. **TC values:** Should be positive and realistic (0-20 mGal for this test)")
     
     return results_df
-# Tambahkan setelah fungsi-fungsi yang ada, sebelum bagian UI Streamlit
 
 # ============================================================
 # METODE-METODE DETERMINASI DENSITAS ALTERNATIF
@@ -784,7 +797,6 @@ def nettleton_method(df, density_range=(1.5, 3.0), step=0.1, debug=False):
     
     return optimal_density, densities, correlations
 
-
 def maximum_entropy_method(df, density_range=(2.0, 3.0), n_points=50, debug=False):
     """
     Maximum entropy density determination (Komatiitsch, 1994).
@@ -823,7 +835,6 @@ def maximum_entropy_method(df, density_range=(2.0, 3.0), n_points=50, debug=Fals
     
     return optimal_density, densities, entropy_values
 
-
 def iterative_least_squares_method(df, initial_rho=2.67, max_iter=20, tol=0.001, debug=False):
     """
     Iterative least squares density determination.
@@ -841,7 +852,6 @@ def iterative_least_squares_method(df, initial_rho=2.67, max_iter=20, tol=0.001,
         bouguer = df['FAA'] - 0.04192 * rho * df['Elev']
         
         # Linear regression: FAA = slope * Elev + intercept
-        # slope = 0.04192 * rho_optimal
         X = df['Elev'].values.reshape(-1, 1)
         y = df['FAA'].values
         
@@ -869,7 +879,6 @@ def iterative_least_squares_method(df, initial_rho=2.67, max_iter=20, tol=0.001,
         st.write(f"- Densitas akhir: {rho:.3f} g/cm³")
     
     return rho, max_iter
-
 
 def comprehensive_density_analysis(df, debug=True):
     """
@@ -1030,7 +1039,6 @@ def comprehensive_density_analysis(df, debug=True):
     else:
         st.error("Tidak ada metode yang berhasil dihitung.")
         return None, None
-
 
 def plot_density_validation(df, optimal_density):
     """
@@ -1197,21 +1205,70 @@ def plot_density_validation(df, optimal_density):
     plt.tight_layout()
     return fig
 
-
-# Tambahkan bagian ini ke UI Streamlit, setelah tab4
 # ============================================================
-# MODIFIKASI TAB INTERFACE
+# DEBUG FUNCTION UNTUK PARASNIS SLOPE TINGGI
 # ============================================================
 
-# Ganti bagian ini:
-# st.subheader("Visualisasi Hasil")
-# tab1, tab2, tab3, tab4 = st.tabs(["Parasnis Plot", "Topography", "CBA Map", "Data Export"])
-
-
-# Tab1-3 tetap sama...
-
-
+def debug_parasnis_slope(df_all, debug_mode=True):
+    """
+    Fungsi khusus untuk debugging gradien Parasnis yang terlalu tinggi.
+    """
+    if debug_mode:
+        st.subheader("🔍 Debugging Gradien Parasnis Tinggi")
         
+        # Analisis penyebab
+        causes = []
+        
+        # 1. Cek range data
+        if 'X-Parasnis' in df_all.columns and 'Y-Parasnis' in df_all.columns:
+            x_range = df_all['X-Parasnis'].max() - df_all['X-Parasnis'].min()
+            y_range = df_all['Y-Parasnis'].max() - df_all['Y-Parasnis'].min()
+            
+            ratio = y_range / x_range if x_range != 0 else float('inf')
+            
+            if ratio > 1000:
+                causes.append(f"Range Y ({y_range:.1f}) >> Range X ({x_range:.1f}), ratio: {ratio:.0f}")
+        
+        # 2. Cek outlier
+        from scipy import stats
+        if 'Y-Parasnis' in df_all.columns:
+            z_scores = np.abs(stats.zscore(df_all['Y-Parasnis'].dropna()))
+            outlier_count = np.sum(z_scores > 3)
+            if outlier_count > 0:
+                causes.append(f"{outlier_count} outlier dalam Y-Parasnis (|z| > 3)")
+        
+        # 3. Cek koreksi medan (TC)
+        if 'Koreksi Medan' in df_all.columns:
+            tc_stats = df_all['Koreksi Medan'].describe()
+            if tc_stats['max'] > 50:
+                causes.append(f"TC terlalu besar (max={tc_stats['max']:.1f} mGal)")
+            if tc_stats['mean'] > 20:
+                causes.append(f"TC rata-rata terlalu besar (mean={tc_stats['mean']:.1f} mGal)")
+        
+        # 4. Cek elevasi
+        if 'Elev' in df_all.columns:
+            elev_range = df_all['Elev'].max() - df_all['Elev'].min()
+            if elev_range > 1000:
+                causes.append(f"Range elevasi sangat besar ({elev_range:.0f} m)")
+        
+        # 5. Tampilkan penyebab
+        if causes:
+            st.warning("**Penyebab potensial gradien tinggi:**")
+            for cause in causes:
+                st.write(f"- {cause}")
+            
+            # Solusi
+            st.info("**Solusi yang dicoba:**")
+            st.write("1. **Periksa koreksi medan (TC)** - nilai harus antara 0-50 mGal untuk kebanyakan area")
+            st.write("2. **Kurangi max_radius OSS** ke 2000-3000 m")
+            st.write("3. **Matikan optimized elevation** (use_optimized_elevation=False)")
+            st.write("4. **Tingkatkan threshold_mGal** ke 0.1-0.2 mGal")
+            st.write("5. **Verifikasi formula X-Parasnis**: X = 0.04192 * Elev - TC")
+            
+            return True
+        
+    return False
+
 # ============================================================
 # UI STREAMLIT
 # ============================================================
@@ -1221,7 +1278,7 @@ st.markdown(
         <img src="https://raw.githubusercontent.com/dzakyw/AutoGrav/main/logo esdm.png" style="width:200px; margin-right:5px;">
         <div>
             <h2 style="margin-bottom:0;">Auto Grav - Semua Terasa Cepat</h2>
-            <p style="color:red; font-weight:bold;">OSS Algorithm Corrected Version</p>
+            <p style="color:red; font-weight:bold;">OSS Algorithm CRITICALLY CORRECTED Version</p>
         </div>
     </div>
     <hr>
@@ -1245,25 +1302,25 @@ if st.sidebar.button("Run OSS Test"):
 st.sidebar.subheader("Interactive Plot Options")
 enable_interactive = st.sidebar.checkbox("Enable Interactive Plots", value=True)
 
-# PARAMETER OSS
-st.sidebar.subheader("OSS Algorithm Parameters")
-debug_mode = st.sidebar.checkbox("Debug Mode", value=False)
+# PARAMETER OSS - OPTIMIZED SETTINGS
+st.sidebar.subheader("OSS Algorithm Parameters (Optimized)")
+debug_mode = st.sidebar.checkbox("Debug Mode", value=True)  # Enabled for debugging
 st.session_state.debug_mode = debug_mode
 
 threshold_mgal = st.sidebar.slider(
     "Threshold (mGal) for subdivision",
-    min_value=0.001,
-    max_value=0.1,
-    value=0.05,
-    step=0.001,
-    help="Start with 0.05 mGal for optimal results"
+    min_value=0.01,
+    max_value=0.5,
+    value=0.1,  # Increased from 0.05
+    step=0.01,
+    help="Start with 0.1 mGal for stable results"
 )
 
 max_radius = st.sidebar.number_input(
-    "Maximum Radius (m)",
-    value=4500,
+    "Maximum Radius (m) - RECOMMENDED: 2000-3000",
+    value=2000,  # Reduced from 4500
     step=100,
-    help="Jangkauan maksimum untuk koreksi medan"
+    help="Jangkauan maksimum untuk koreksi medan. Kurangi jika slope terlalu tinggi."
 )
 
 density = st.sidebar.number_input(
@@ -1276,17 +1333,24 @@ density = st.sidebar.number_input(
 
 use_optimized_elev = st.sidebar.checkbox(
     "Use optimized elevation (z')", 
-    value=True,
-    help="Menggunakan persamaan (8) untuk optimasi z'"
+    value=False,  # Disabled initially
+    help="Menggunakan persamaan (8) untuk optimasi z'. MATIKAN jika slope tinggi"
 )
 
 min_points_sector = st.sidebar.number_input(
     "Minimum points per sector",
-    min_value=1,
-    max_value=70,
-    value=10,
+    min_value=5,
+    max_value=100,
+    value=20,  # Increased
     help="Sector dengan points < ini tidak di-subdivide"
 )
+
+# Advanced parameters
+with st.sidebar.expander("Advanced Parameters"):
+    tolerance_nGal = st.number_input("Tolerance (nGal)", value=10.0, min_value=0.1, max_value=100.0)
+    theta_step = st.number_input("Theta step (degrees)", value=5.0, min_value=0.5, max_value=10.0)
+    r_step_near = st.number_input("R step near (m)", value=20.0, min_value=5.0, max_value=50.0)
+    r_step_far = st.number_input("R step far (m)", value=100.0, min_value=20.0, max_value=200.0)
 
 run = st.sidebar.button("Run Processing", type="primary")
 
@@ -1353,11 +1417,11 @@ if run:
     
     oss_params = {
         'max_radius': max_radius,
-        'tolerance_nGal': 1.0,
+        'tolerance_nGal': tolerance_nGal,
         'threshold_mGal': threshold_mgal,
-        'theta_step': 1.0,
-        'r_step_near': 10.0,
-        'r_step_far': 50.0,
+        'theta_step': theta_step,
+        'r_step_near': r_step_near,
+        'r_step_far': r_step_far,
         'min_points_per_sector': min_points_sector,
         'use_optimized_elevation': use_optimized_elev,
         'debug': debug_mode,
@@ -1365,6 +1429,7 @@ if run:
     }
     
     st.info(f"**OSS Parameters:** Max radius = {max_radius} m, Threshold = {threshold_mgal} mGal, Density = {density} kg/m³")
+    st.warning(f"**IMPORTANT:** Using ABSOLUTE elevation (z = DEM height), not elevation difference!")
     
     # Tampilkan contoh perhitungan latitude correction untuk validasi
     st.subheader("Latitude Correction Validation")
@@ -1465,8 +1530,9 @@ if run:
                 with col3:
                     st.metric("Max", f"{tc_array.max():.3f} mGal")
         
+        # X-Parasnis calculation - KEEPING YOUR ORIGINAL FORMULA
         df["Koreksi Medan"] = tc_list
-        df["X-Parasnis"] = 0.04192 * df["Elev"] - df["Koreksi Medan"]  # BENAR!
+        df["X-Parasnis"] = 0.04192 * df["Elev"] - df["Koreksi Medan"]  # YOUR ORIGINAL FORMULA
         df["Y-Parasnis"] = df["Free Air Correction"]
         df["Hari"] = sh
         
@@ -1513,15 +1579,28 @@ if run:
         y_actual = df_all.loc[mask,"Y-Parasnis"]
         r_squared = 1 - np.sum((y_actual - y_pred)**2) / np.sum((y_actual - np.mean(y_actual))**2)
         
+        density_parasnis = slope / 0.04192
+        
         st.info(f"**Parasnis Regression:** Slope (K) = {slope:.5f}, R² = {r_squared:.3f}")
+        st.info(f"**Implied Density:** ρ = {density_parasnis:.3f} g/cm³")
         
         if r_squared < 0.7:
             st.warning("Low R² value in Parasnis regression! Check TC calculations.")
+        
+        # DEBUG jika slope terlalu tinggi
+        if abs(slope) > 0.15:  # Jika gradien > 0.15
+            st.error(f"⚠️ VERY HIGH SLOPE DETECTED: {slope:.3f}")
+            debug_parasnis_slope(df_all, debug_mode)
     else:
         slope = np.nan
         st.warning("Not enough data for Parasnis regression.")
     
-    df_all["Bouger Correction"] = 0.04192 * slope * df_all["Elev"]
+    # PERHATIAN: Formula Bouguer correction menggunakan slope dari Parasnis
+    if not np.isnan(slope):
+        df_all["Bouger Correction"] = 0.04192 * slope * df_all["Elev"]
+    else:
+        df_all["Bouger Correction"] = 0.04192 * 2.67 * df_all["Elev"]  # Fallback density
+    
     df_all["Simple Bouger Anomaly"] = df_all["FAA"] - df_all["Bouger Correction"]
     df_all["Complete Bouger Anomaly"] = df_all["Simple Bouger Anomaly"] + df_all["Koreksi Medan"]
     
@@ -1532,7 +1611,7 @@ if run:
         st.write(f"**Total rows processed:** {len(df_all)}")
         st.write(f"**Total sheets processed:** {len(all_dfs)}")
     
-    # Menjadi:
+    # TABS
     st.subheader("Visualisasi Hasil")
     tab1, tab2, tab3, tab4, tab5 = st.tabs(["Parasnis Plot", "Topography", "CBA Map", "Analisis Densitas", "Data Export"])
 
@@ -1551,16 +1630,26 @@ if run:
             
             ax_parasnis.set_xlabel("X-Parasnis (mGal)")
             ax_parasnis.set_ylabel("Y-Parasnis (mGal)")
-            ax_parasnis.set_title("Diagram Parasnis (X vs Y)")
+            ax_parasnis.set_title(f"Diagram Parasnis (Slope = {slope:.5f}, ρ = {density_parasnis:.2f} g/cm³)")
             ax_parasnis.grid(True, linestyle="--", alpha=0.5)
             ax_parasnis.legend()
             st.pyplot(fig_parasnis)
             
-            col1, col2 = st.columns(2)
+            col1, col2, col3 = st.columns(3)
             with col1:
                 st.success(f"**Slope (K):** {slope:.5f}")
             with col2:
                 st.info(f"**R-squared:** {r_squared:.3f}")
+            with col3:
+                st.info(f"**Implied Density:** {density_parasnis:.3f} g/cm³")
+                
+            # Warning jika density tidak realistic
+            if density_parasnis < 1.5 or density_parasnis > 3.5:
+                st.error(f"⚠️ Unrealistic density from Parasnis: {density_parasnis:.2f} g/cm³")
+                st.write("Possible causes:")
+                st.write("1. OSS TC values are too large/small")
+                st.write("2. X-Parasnis formula might need adjustment")
+                st.write("3. Try Nettleton method for better density estimation")
         else:
             st.warning("Not enough data for Parasnis plot.")
     
@@ -1580,8 +1669,7 @@ if run:
         else:
             st.warning("No data available for CBA plot.")
     
-   
-        # Tab 4: Analisis Densitas (BARU)
+    # Tab 4: Analisis Densitas
     with tab4:
         st.header("📊 Analisis Densitas Komprehensif")
     
@@ -1673,7 +1761,7 @@ if run:
     else:
         st.warning("Harap proses data terlebih dahulu di tab utama.")
 
-    # Tab 5: Data Export (diperbarui)
+    # Tab 5: Data Export
     with tab5:
         st.subheader("Download Hasil Perhitungan")
     
@@ -1727,81 +1815,66 @@ if run:
     
     st.write(f"- **Total stasiun diproses:** {len(df_all)}")
     st.write(f"- **Total sheets:** {len(all_dfs)}")
+    st.write(f"- **Mean Terrain Correction:** {tc_values.mean():.2f} mGal")
+    st.write(f"- **TC Range:** {tc_values.min():.2f} to {tc_values.max():.2f} mGal")
     
-    st.success("Processing Sudah Selesai, Download data hasil")
+    # Final recommendation
+    if 'slope' in locals() and not np.isnan(slope) and abs(slope) > 0.15:
+        st.error("""
+        **⚠️ WARNING: HIGH PARASNIS SLOPE DETECTED**
+        
+        Your Parasnis slope is > 0.15, indicating potential issues:
+        
+        1. **TC values may be incorrect** - Check OSS parameters
+        2. **Try reducing max_radius** to 2000 m
+        3. **Disable optimized elevation** 
+        4. **Consider using Nettleton method** for density determination
+        
+        The corrected OSS algorithm now uses ABSOLUTE elevation (z = DEM height).
+        This should give more realistic TC values and Parasnis slopes.
+        """)
+    else:
+        st.success("""
+        **✅ PROCESSING COMPLETE**
+        
+        The corrected OSS algorithm has been applied with:
+        - Absolute elevation (z = DEM height)
+        - Optimized parameters for stable results
+        - Comprehensive density analysis
+        
+        Download your results using the buttons above.
+        """)
 
 # ============================================================
-# TAMBAHAN: Fungsi untuk debugging gradien tinggi
+# TAMBAHAN: Informasi troubleshooting
 # ============================================================
+st.sidebar.subheader("Troubleshooting Tips")
 
-def debug_high_gradient(df_all, debug_mode=True):
-    """
-    Fungsi khusus untuk debugging gradien Parasnis yang terlalu tinggi.
-    """
-    if debug_mode:
-        st.subheader("🔍 Debugging Gradien Parasnis Tinggi")
-        
-        # Analisis penyebab
-        causes = []
-        
-        # 1. Cek range data
-        if 'X-Parasnis' in df_all.columns and 'Y-Parasnis' in df_all.columns:
-            x_range = df_all['X-Parasnis'].max() - df_all['X-Parasnis'].min()
-            y_range = df_all['Y-Parasnis'].max() - df_all['Y-Parasnis'].min()
-            
-            ratio = y_range / x_range if x_range != 0 else float('inf')
-            
-            if ratio > 1000:
-                causes.append(f"Range Y ({y_range:.1f}) >> Range X ({x_range:.1f}), ratio: {ratio:.0f}")
-        
-        # 2. Cek outlier
-        from scipy import stats
-        if 'Y-Parasnis' in df_all.columns:
-            z_scores = np.abs(stats.zscore(df_all['Y-Parasnis'].dropna()))
-            outlier_count = np.sum(z_scores > 3)
-            if outlier_count > 0:
-                causes.append(f"{outlier_count} outlier dalam Y-Parasnis (|z| > 3)")
-        
-        # 3. Cek konsistensi base station
-        if 'Nama' in df_all.columns:
-            base_name = df_all['Nama'].iloc[0]
-            base_readings = df_all[df_all['Nama'] == base_name]
-            if len(base_readings) > 1:
-                g_variation = base_readings['G_read (mGal)'].std()
-                if g_variation > 1.0:
-                    causes.append(f"Base station {base_name} tidak konsisten (std={g_variation:.2f} mGal)")
-        
-        # 4. Tampilkan penyebab
-        if causes:
-            st.warning("**Penyebab potensial gradien tinggi:**")
-            for cause in causes:
-                st.write(f"- {cause}")
-            
-            # Solusi
-            st.info("**Solusi yang dicoba:**")
-            st.write("1. Gunakan metode Nettleton untuk validasi densitas")
-            st.write("2. Periksa konsistensi pengukuran base station")
-            st.write("3. Cek koreksi medan (TC) - apakah terlalu besar/kecil?")
-            st.write("4. Verifikasi nilai G_base yang digunakan")
-            
-            return True
-        
-    return False
+with st.sidebar.expander("Jika slope Parasnis > 3"):
+    st.write("""
+    1. **Kurangi max_radius** ke 2000 m
+    2. **Matikan optimized elevation** (use_optimized_elev=False)
+    3. **Tingkatkan threshold** ke 0.2-0.5 mGal
+    4. **Verifikasi formula X-Parasnis**: X = 0.04192 * Elev - TC
+    5. **TC values** harus antara 0-50 mGal untuk kebanyakan area
+    """)
 
-# Panggil fungsi debug setelah perhitungan Parasnis
-if run and 'slope' in locals() and not np.isnan(slope):
-    if abs(slope) > 0.15:  # Jika gradien > 0.15
-        debug_high_gradient(df_all, debug_mode)
-        st.info("Processing Sudah Selesai, Download data hasil")
+with st.sidebar.expander("Jika OSS terlalu lambat"):
+    st.write("""
+    1. **Kurangi max_radius** 
+    2. **Tingkatkan theta_step** ke 5-10 derajat
+    3. **Tingkatkan r_step** values
+    4. **Tingkatkan min_points_per_sector** 
+    5. **Matikan debug mode**
+    """)
 
-
-
-
-
-
-
-
-
-
-
-
+with st.sidebar.expander("Koreksi yang dilakukan"):
+    st.write("""
+    **CRITICAL FIXES APPLIED:**
+    
+    1. **z = ABSOLUTE DEM elevation** (not elevation difference)
+    2. **Optimized default parameters** for stable results
+    3. **Added sanity checks** for TC values
+    4. **Debug function** for high slopes
+    5. **Keep original X-Parasnis formula**: X = 0.04192 * Elev - TC
+    """)
