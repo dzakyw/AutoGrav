@@ -1608,7 +1608,7 @@ if run:
     
     # Tab 4: Analisis Densitas
     with tab4:
-    st.header("📊 Analisis Densitas Komprehensif")
+        st.header("📊 Analisis Densitas Komprehensif")
     
     if 'df_all' in locals() and len(df_all) > 0:
         # Jalankan analisis densitas komprehensif TANPA PARASNIS
@@ -1816,6 +1816,7 @@ with st.sidebar.expander("Koreksi yang dilakukan"):
     4. **Debug function** for high slopes
     5. **Keep original X-Parasnis formula**: X = 0.04192 * Elev - TC
     """)
+
 
 
 
