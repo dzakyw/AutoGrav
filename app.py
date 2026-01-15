@@ -1597,15 +1597,6 @@ if run:
         else:
             st.info("No DEM available for topography plot.")
     
-    with tab4:
-        if len(df_all) > 0:
-            fig_cba = plot_cont(df_all["Easting"], df_all["Northing"], 
-                               df_all["Complete Bouger Anomaly Optimal"], 
-                               "Complete Bouguer Anomaly")
-            st.pyplot(fig_cba)
-        else:
-            st.warning("No data available for CBA plot.")
-    
     # Tab 4: Analisis Densitas
     with tab3:
         st.header("📊 Analisis Densitas Komprehensif")
@@ -1703,6 +1694,16 @@ if run:
             
     else:
         st.warning("Harap proses data terlebih dahulu di tab utama.")
+    
+    with tab4:
+        if len(df_all) > 0:
+            fig_cba = plot_cont(df_all["Easting"], df_all["Northing"], 
+                               df_all["Complete Bouger Anomaly Optimal"], 
+                               "Complete Bouguer Anomaly")
+            st.pyplot(fig_cba)
+        else:
+            st.warning("No data available for CBA plot.")
+    
 # ============================================================
 # TAMBAHAN: Informasi troubleshooting
 # ============================================================
@@ -1736,6 +1737,7 @@ with st.sidebar.expander("Koreksi yang dilakukan"):
     4. **Debug function** for high slopes
     5. **Keep original X-Parasnis formula**: X = 0.04192 * Elev - TC
     """)
+
 
 
 
