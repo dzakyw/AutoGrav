@@ -1,5 +1,6 @@
 streamlit
 numpy
+scikit-learn
 pandas
 pyproj
 scipy
@@ -11,3 +12,4 @@ xarray
 plotly 
 folium
 pillow
+
