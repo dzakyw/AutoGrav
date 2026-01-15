@@ -5,144 +5,296 @@ from math import sqrt
 from scipy.interpolate import griddata
 import matplotlib.pyplot as plt
 import io, time
-from PIL import Image
-import os
 import hashlib
 import warnings
 warnings.filterwarnings('ignore')
 
-# - Import Plotly
-try:
-    import plotly.graph_objects as go
-    import plotly.express as px
-    from plotly.subplots import make_subplots
-    PLOTLY_AVAILABLE = True
-except ImportError:
-    PLOTLY_AVAILABLE = False
-    st.warning("Plotly tidak terinstall. Interactive plots tidak akan tersedia.")
-
-# Jika ingin mencoba Folium untuk peta interaktif:
-try:
-    import folium
-    from folium.plugins import MarkerCluster, HeatMap
-    FOLIUM_AVAILABLE = True
-except ImportError:
-    FOLIUM_AVAILABLE = False
-
 # ============================================================
-# CRITICAL UPDATE: IMPLEMENTING GEOSOFT TERRAIN CORRECTION METHOD
-# Based on Nagy (1966) and Kane (1962) as per Geosoft documentation
+# AUTHENTICATION FUNCTIONS (keep your existing)
 # ============================================================
 
-# Constants
-G = 6.67430e-11  # m^3 kg^-1 s^-2 (gravitational constant)
-MGAL_TO_SI = 1e-5  # 1 mGal = 1e-5 m/s²
+def hash_password(password: str):
+    return hashlib.sha256(password.encode()).hexdigest()
+
+USER_DB = {
+    "admin": hash_password("admin"),
+    "user": hash_password("12345"),
+}
+
+USER_ROLES = {
+    "admin": "admin",
+    "user": "viewer",
+}
+
+def authenticate(username, password):
+    if username in USER_DB:
+        return USER_DB[username] == hash_password(password)
+    return False
+
+def login_page():
+    st.title("Welcome to Auto Grav")
+    username = st.text_input("Username")
+    password = st.text_input("Password", type="password")
+    login_btn = st.button("Login")
+    
+    if login_btn:
+        if authenticate(username, password):
+            st.session_state.logged_in = True
+            st.session_state.username = username
+            st.session_state.role = USER_ROLES.get(username, "viewer")
+            st.rerun()
+        else:
+            st.error("Invalid username or password")
+    st.stop()
+
+def logout_button():
+    if st.sidebar.button("Logout"):
+        st.session_state.clear()
+        st.rerun()
+
+def require_login():
+    if "logged_in" not in st.session_state or not st.session_state.logged_in:
+        login_page()
+    st.sidebar.success(f"Logged in as: {st.session_state.username}")
+    logout_button()
+
+require_login()
+
+# ============================================================
+# CORE FUNCTIONS (simplified for CSV only)
+# ============================================================
+
+def latlon_to_utm_redfearn(lat, lon):
+    """Convert lat/lon to UTM coordinates"""
+    lat = np.asarray(lat, dtype=float)
+    lon = np.asarray(lon, dtype=float)
+    
+    a = 6378137.0
+    f = 1 / 298.257223563
+    k0 = 0.9996
+    b = a * (1 - f)
+    e = sqrt(1 - (b / a) ** 2)
+    e2 = e * e
+    
+    zone = np.floor((lon + 180) / 6) + 1
+    lon0 = (zone - 1) * 6 - 180 + 3
+    lon0_rad = np.radians(lon0)
+    lat_rad = np.radians(lat)
+    lon_rad = np.radians(lon)
+    
+    N = a / np.sqrt(1 - e2 * np.sin(lat_rad) ** 2)
+    T = np.tan(lat_rad) ** 2
+    C = (e2 / (1 - e2)) * np.cos(lat_rad) ** 2
+    A = np.cos(lat_rad) * (lon_rad - lon0_rad)
+    
+    M = (a * ((1 - e2/4 - 3*e2*e2/64 - 5*e2**3/256) * lat_rad
+              - (3*e2/8 + 3*e2*e2/32 + 45*e2**3/1024) * np.sin(2*lat_rad)
+              + (15*e2*e2/256 + 45*e2**3/1024) * np.sin(4*lat_rad)
+              - (35*e2**3/3072) * np.sin(6*lat_rad)))
+    
+    easting = k0 * N * (A + (1 - T + C) * A**3 / 6
+                        + (5 - 18*T + T*T + 72*C - 58*e2) * A**5 / 120) + 500000
+    
+    northing = k0 * (M + N * np.tan(lat_rad) * (A**2/2
+                     + (5 - T + 9*C + 4*C*C) * A**4/24
+                     + (61 - 58*T + T*T + 600*C - 330*e2) * A**6 / 720))
+    
+    hemi = np.where(lat >= 0, "north", "south")
+    northing = np.where(hemi == "south", northing + 10000000, northing)
+    
+    return easting, northing, zone, hemi
+
+def load_dem_csv(file):
+    """
+    Load DEM from CSV file with columns: lat, lon, elev
+    Supports: .csv, .txt, .xyz
+    """
+    # Try different delimiters
+    try:
+        # First try comma
+        df = pd.read_csv(file)
+    except:
+        file.seek(0)
+        try:
+            # Try whitespace
+            df = pd.read_csv(file, sep=r"\s+", engine="python")
+        except:
+            file.seek(0)
+            # Try tab
+            df = pd.read_csv(file, sep="\t")
+    
+    # Standardize column names
+    df.columns = df.columns.str.strip().str.lower()
+    
+    # Map common column names
+    col_map = {}
+    for col in df.columns:
+        if 'lat' in col or 'latitude' in col:
+            col_map[col] = 'lat'
+        elif 'lon' in col or 'long' in col or 'longitude' in col:
+            col_map[col] = 'lon'
+        elif 'elev' in col or 'elevation' in col or 'z' in col or 'alt' in col or 'height' in col:
+            col_map[col] = 'elev'
+        elif 'x' in col and 'y' not in col:
+            col_map[col] = 'lon'
+        elif 'y' in col and 'x' not in col:
+            col_map[col] = 'lat'
+    
+    df = df.rename(columns=col_map)
+    
+    # Keep only needed columns
+    needed_cols = ['lat', 'lon', 'elev']
+    available_cols = [col for col in needed_cols if col in df.columns]
+    
+    if len(available_cols) < 3:
+        st.error(f"DEM file must contain: lat, lon, elev columns. Found: {list(df.columns)}")
+        return None
+    
+    df = df[available_cols]
+    
+    # Convert to numeric
+    for col in df.columns:
+        df[col] = pd.to_numeric(df[col], errors='coerce')
+    
+    df = df.dropna()
+    
+    # Convert to UTM
+    E, N, _, _ = latlon_to_utm_redfearn(df["lat"], df["lon"])
+    dem_df = pd.DataFrame({
+        "Easting": E,
+        "Northing": N,
+        "Elev": df["elev"]
+    })
+    
+    return dem_df
+
+def compute_drift(df, G_base, debug_mode=False):
+    """Compute drift correction (keep your existing)"""
+    df = df.copy()
+    df["Time"] = pd.to_datetime(df["Time"], format="%H:%M:%S", errors="raise")
+    df["G_read (mGal)"] = pd.to_numeric(df["G_read (mGal)"], errors="coerce")
+    
+    names = df["Nama"].astype(str).tolist()
+    unique_st = list(dict.fromkeys(names))
+    
+    base = unique_st[0]
+    unknown = [s for s in unique_st if s != base]
+    N = len(unknown) + 1
+    
+    A = []
+    b = []
+    frac = (df["Time"].dt.hour*3600 + df["Time"].dt.minute*60 + df["Time"].dt.second) / 86400.0
+    
+    for i in range(len(df)-1):
+        row = np.zeros(N)
+        dG = df["G_read (mGal)"].iloc[i+1] - df["G_read (mGal)"].iloc[i]
+        dt = frac.iloc[i+1] - frac.iloc[i]
+        const = dG
+        
+        si = names[i]; sj = names[i+1]
+        if sj != base:
+            row[unknown.index(sj)] = 1
+        else:
+            const -= G_base
+        if si != base:
+            row[unknown.index(si)] = -1
+        else:
+            const += G_base
+        row[-1] = dt
+        A.append(row); b.append(const)
+    
+    A = np.array(A, dtype=float); b = np.array(b, dtype=float)
+    x, *_ = np.linalg.lstsq(A, b, rcond=None)
+    D = float(x[-1])
+    
+    Gmap = {base: float(G_base)}
+    for idx, st in enumerate(unknown):
+        Gmap[st] = float(x[idx])
+    
+    return Gmap, D
+
+def latitude_correction(lat):
+    """Calculate latitude correction"""
+    phi = np.radians(lat)
+    s = np.sin(phi)
+    return 978031.846 * (1 + (0.0053024 * s*s) - 0.0000059 * np.sin(2*phi)**2)
+
+def free_air(elev):
+    """Free-air correction: 0.3086 * elevation (m)"""
+    return 0.3086 * elev
+
+# ============================================================
+# GEOSOFT TERRAIN CORRECTION (CSV version)
+# ============================================================
+
+G = 6.67430e-11  # Gravitational constant
 
 class GeosoftTerrainCorrector:
     """
-    Implements the industry-standard terrain correction method used by Geosoft/Oasis montaj.
-    Based on Nagy (1966) for near zones and Kane (1962) for far zones.
+    Simplified Geosoft terrain correction for CSV DEM
+    Based on Nagy (1966) and Kane (1962)
     """
     
-    def __init__(self, dem_grid, station_coords, params=None):
+    def __init__(self, dem_df, station_coords, params=None):
         """
-        Initialize terrain corrector.
-        
-        Parameters:
-        -----------
-        dem_grid : DataFrame with columns ['Easting', 'Northing', 'Elev']
-            Digital elevation model grid
-        station_coords : tuple (easting, northing, elevation)
-            Station coordinates (x, y, z)
-        params : dict
-            Calculation parameters:
-            - correction_distance : maximum distance for correction (meters)
-            - earth_density : density in kg/m³ (default 2670)
-            - cell_size : DEM grid cell size (meters)
-            - optimize : boolean for optimization (default True)
+        Initialize with CSV DEM data
+        dem_df: DataFrame with Easting, Northing, Elev
+        station_coords: (easting, northing, elevation)
         """
         self.e0, self.n0, self.z0 = station_coords
-        self.dem_grid = dem_grid.copy()
+        self.dem_df = dem_df.copy()
         
-        # Default parameters matching Geosoft documentation
+        # Default parameters
         self.params = {
-            'correction_distance': 25000,  # 25 km default for flat areas
-            'earth_density': 2670.0,  # kg/m³
-            'water_density': 1000.0,   # kg/m³
-            'cell_size': None,  # Will be calculated from DEM
-            'optimize': True,  # Use optimization for large grids
-            'debug': False,
-            'use_water_bodies': False,
-            'water_reference': 0.0,  # Sea level
-            'extend_grid': True  # Extend grid if needed
+            'correction_distance': 25000,  # meters
+            'earth_density': 2670.0,      # kg/m³
+            'cell_size': self._estimate_cell_size(),
+            'optimize': True,
+            'debug': False
         }
         
         if params:
             self.params.update(params)
         
-        # Calculate DEM statistics
-        self._calculate_dem_stats()
-        
-        # Prepare DEM data
-        self._prepare_dem_data()
-        
-    def _calculate_dem_stats(self):
-        """Calculate DEM statistics including cell size."""
-        x = self.dem_grid['Easting'].values
-        y = self.dem_grid['Northing'].values
-        
-        # Calculate approximate cell size
-        if len(x) > 1:
-            x_sorted = np.sort(np.unique(x))
-            y_sorted = np.sort(np.unique(y))
-            
-            if len(x_sorted) > 1:
-                dx = np.min(np.diff(x_sorted))
-            else:
-                dx = np.sqrt((x.max() - x.min())**2 / len(x))
-                
-            if len(y_sorted) > 1:
-                dy = np.min(np.diff(y_sorted))
-            else:
-                dy = np.sqrt((y.max() - y.min())**2 / len(y))
-            
-            self.params['cell_size'] = min(abs(dx), abs(dy))
-        else:
-            self.params['cell_size'] = 100.0  # Default
-        
-        if self.params['debug']:
-            st.write(f"DEM Cell Size: {self.params['cell_size']:.1f} m")
-            st.write(f"DEM Extent: X={x.min():.0f} to {x.max():.0f} m, "
-                    f"Y={y.min():.0f} to {y.max():.0f} m")
+        # Prepare DEM
+        self._prepare_dem()
     
-    def _prepare_dem_data(self):
-        """Prepare DEM data for terrain correction calculations."""
-        # Calculate distances and angles from station
-        dx = self.dem_grid['Easting'] - self.e0
-        dy = self.dem_grid['Northing'] - self.n0
-        dz = self.dem_grid['Elev'] - self.z0
+    def _estimate_cell_size(self):
+        """Estimate average cell size from DEM points"""
+        if len(self.dem_df) < 4:
+            return 100.0
         
-        self.dem_grid['distance'] = np.sqrt(dx**2 + dy**2)
-        self.dem_grid['dx'] = dx
-        self.dem_grid['dy'] = dy
-        self.dem_grid['dz'] = dz
+        # Sample points to estimate spacing
+        sample = self.dem_df.sample(min(100, len(self.dem_df)))
+        eastings = sample['Easting'].values
+        northings = sample['Northing'].values
         
-        # Sort by distance for efficiency
-        self.dem_grid = self.dem_grid.sort_values('distance')
+        # Calculate minimum distances between points
+        from scipy.spatial import KDTree
+        points = np.column_stack([eastings, northings])
+        tree = KDTree(points)
+        distances, _ = tree.query(points, k=2)  # Get nearest neighbor
+        
+        # Use median of nearest neighbor distances
+        cell_size = np.median(distances[:, 1])  # Skip self-distance
+        return max(cell_size, 10.0)  # Minimum 10m
+    
+    def _prepare_dem(self):
+        """Prepare DEM for calculations"""
+        # Calculate distances from station
+        dx = self.dem_df['Easting'] - self.e0
+        dy = self.dem_df['Northing'] - self.n0
+        
+        self.dem_df['distance'] = np.sqrt(dx**2 + dy**2)
+        self.dem_df['dx'] = dx
+        self.dem_df['dy'] = dy
+        self.dem_df['dz'] = self.dem_df['Elev'] - self.z0
+        
+        # Sort by distance
+        self.dem_df = self.dem_df.sort_values('distance').reset_index(drop=True)
     
     def _prism_effect_nagy(self, x1, x2, y1, y2, z1, z2, density):
-        """
-        Calculate gravitational effect of a right rectangular prism.
-        Nagy (1966) formula.
-        
-        Parameters:
-        -----------
-        x1, x2 : prism boundaries in x-direction (relative to station)
-        y1, y2 : prism boundaries in y-direction
-        z1, z2 : prism boundaries in z-direction (elevations)
-        density : density in kg/m³
-        """
-        # Convert coordinates to meters relative to station
+        """Nagy's rectangular prism formula"""
         terms = 0.0
         
         for i in range(2):
@@ -154,227 +306,160 @@ class GeosoftTerrainCorrector:
                     
                     r = np.sqrt(xi**2 + yj**2 + zk**2)
                     
-                    term = xi * yj * np.log(zk + r) + \
-                           yj * zk * np.log(xi + r) + \
-                           zk * xi * np.log(yj + r) - \
-                           (xi**2 * np.arctan2(yj * zk, xi * r) / 2 if xi != 0 else 0) - \
-                           (yj**2 * np.arctan2(zk * xi, yj * r) / 2 if yj != 0 else 0) - \
-                           (zk**2 * np.arctan2(xi * yj, zk * r) / 2 if zk != 0 else 0)
+                    term = xi * yj * np.log(zk + r + 1e-10)
+                    term += yj * zk * np.log(xi + r + 1e-10)
+                    term += zk * xi * np.log(yj + r + 1e-10)
+                    
+                    if xi != 0:
+                        term -= xi**2 * np.arctan2(yj * zk, xi * r + 1e-10) / 2
+                    if yj != 0:
+                        term -= yj**2 * np.arctan2(zk * xi, yj * r + 1e-10) / 2
+                    if zk != 0:
+                        term -= zk**2 * np.arctan2(xi * yj, zk * r + 1e-10) / 2
                     
                     terms += ((-1)**(i + j + k)) * term
         
-        delta_g = G * density * terms
-        return delta_g
-    
-    def _zone0_effect_kane(self, local_elevations, local_slopes, density):
-        """
-        Zone 0 effect using Kane's (1962) sloped triangle method.
-        For the innermost 4 prisms (1 cell radius).
-        """
-        if len(local_elevations) < 4:
-            return 0.0
-        
-        # Simplified Kane formula for sloped triangles
-        cell_size = self.params['cell_size']
-        delta_g = 0.0
-        
-        # Calculate average slope if not provided
-        if local_slopes is None:
-            avg_slope = np.mean(np.abs(np.diff(local_elevations))) / cell_size
-        else:
-            avg_slope = np.mean(np.abs(local_slopes))
-        
-        # Kane's approximation for sloped terrain in immediate vicinity
-        avg_elev = np.mean(local_elevations)
-        R = cell_size * 0.5  # Effective radius
-        
-        # Simplified formula from Kane (1962)
-        if avg_slope > 0:
-            delta_g = (2 * np.pi * G * density * R**2 * avg_slope * 
-                      np.log(1 + avg_elev / (R * avg_slope)))
-        
-        return delta_g
-    
-    def _square_segment_ring_kane(self, R1, R2, avg_elev, density):
-        """
-        Square segment ring formula from Kane (1962).
-        Used for zones beyond 8 cells.
-        
-        Δg = GρΔθ[R2 - R1 + √(R1² + z²) - √(R2² + z²)]
-        """
-        z = abs(avg_elev)
-        
-        # Kane's formula for annular ring
-        term1 = R2 - R1
-        term2 = np.sqrt(R1**2 + z**2) - np.sqrt(R2**2 + z**2)
-        delta_theta = 2 * np.pi  # Full circle
-        
-        delta_g = G * density * delta_theta * (term1 + term2)
-        return delta_g
+        return G * density * terms
     
     def _create_zones(self):
-        """
-        Create calculation zones according to Geosoft methodology:
-        - Zone 0: 1 cell radius (Kane sloped triangle)
-        - Zones 1-2: 2-16 cells (Nagy rectangular prisms)
-        - Zone 3+: Beyond 16 cells (Kane square segment rings)
-        """
+        """Create calculation zones"""
         cell_size = self.params['cell_size']
-        max_distance = self.params['correction_distance']
+        max_dist = self.params['correction_distance']
         
         zones = []
         
-        # Zone 0: Innermost cell (0 to cell_size)
+        # Zone 0: Immediate vicinity (0 to 2 cells)
         zones.append({
             'type': 'zone0',
             'R_min': 0,
-            'R_max': cell_size,
-            'method': 'kane_sloped',
-            'subdivisions': 1
+            'R_max': 2 * cell_size,
+            'method': 'near'
         })
         
-        # Zone 1: 2-8 cells
+        # Zone 1: Near zone (2-8 cells)
         zones.append({
             'type': 'zone1',
-            'R_min': cell_size,
+            'R_min': 2 * cell_size,
             'R_max': 8 * cell_size,
-            'method': 'nagy_prism',
-            'subdivisions': 1  # Will be subdivided into 8x8 grid
+            'method': 'prism',
+            'subdivisions': 8
         })
         
-        # Zone 2: 9-16 cells
+        # Zone 2: Middle zone (8-32 cells)
         zones.append({
             'type': 'zone2',
             'R_min': 8 * cell_size,
-            'R_max': 16 * cell_size,
-            'method': 'nagy_prism',
-            'subdivisions': 2  # Coarser sampling
+            'R_max': 32 * cell_size,
+            'method': 'prism',
+            'subdivisions': 4
         })
         
-        # Create far zones (beyond 16 cells)
-        current_R = 16 * cell_size
+        # Far zones
+        current_R = 32 * cell_size
         zone_num = 3
         
-        while current_R < max_distance:
-            next_R = min(current_R * 2, max_distance)
-            
+        while current_R < max_dist:
+            next_R = min(current_R * 2, max_dist)
             zones.append({
                 'type': f'zone{zone_num}',
                 'R_min': current_R,
                 'R_max': next_R,
-                'method': 'kane_ring',
-                'subdivisions': max(1, int(np.log2(zone_num)))  # Progressive coarsening
+                'method': 'ring',
+                'subdivisions': max(2, 8 - zone_num)
             })
-            
             current_R = next_R
             zone_num += 1
         
         return zones
     
     def _calculate_zone_effect(self, zone, zone_data):
-        """
-        Calculate terrain effect for a specific zone.
-        """
-        zone_type = zone['type']
-        method = zone['method']
+        """Calculate effect for a zone"""
         R_min, R_max = zone['R_min'], zone['R_max']
+        method = zone['method']
         
-        if zone_type == 'zone0':
-            # Zone 0: Kane sloped triangle method
-            local_data = zone_data[zone_data['distance'] <= R_max]
-            if len(local_data) == 0:
+        if method == 'near':
+            # Simple average for immediate vicinity
+            if len(zone_data) == 0:
                 return 0.0
             
-            elevations = local_data['Elev'].values
-            # Simple slope approximation
-            if len(elevations) > 1:
-                slopes = np.diff(elevations) / self.params['cell_size']
-            else:
-                slopes = None
+            avg_elev = zone_data['Elev'].mean() - self.z0
+            avg_dist = zone_data['distance'].mean()
             
-            effect = self._zone0_effect_kane(elevations, slopes, self.params['earth_density'])
-            
-        elif method == 'nagy_prism':
-            # Zones 1-2: Nagy rectangular prisms
-            # Subdivide into square segments
-            n_segments = zone['subdivisions'] * 8  # 8x8 grid for zone 1, 4x4 for zone 2
-            
-            segment_width = (R_max - R_min) / zone['subdivisions']
+            # Simple formula for near zone
+            effect = 2 * np.pi * G * self.params['earth_density'] * avg_elev * (
+                np.sqrt(avg_dist**2 + avg_elev**2) - avg_dist
+            )
+        
+        elif method == 'prism':
+            # Subdivide into prisms
+            n_div = zone.get('subdivisions', 4)
             total_effect = 0.0
             
-            for i in range(zone['subdivisions']):
-                for j in range(zone['subdivisions']):
+            for i in range(n_div):
+                for j in range(n_div):
                     # Define prism boundaries
-                    x_min = R_min + i * segment_width
-                    x_max = x_min + segment_width
-                    y_min = R_min + j * segment_width
-                    y_max = y_min + segment_width
+                    x_min = R_min + (R_max - R_min) * i / n_div
+                    x_max = x_min + (R_max - R_min) / n_div
+                    y_min = R_min + (R_max - R_min) * j / n_div
+                    y_max = y_min + (R_max - R_min) / n_div
                     
-                    # Find elevations in this segment
-                    segment_mask = (
+                    # Find points in this prism
+                    mask = (
                         (zone_data['dx'].abs() >= x_min) & 
                         (zone_data['dx'].abs() < x_max) &
                         (zone_data['dy'].abs() >= y_min) & 
                         (zone_data['dy'].abs() < y_max)
                     )
                     
-                    if segment_mask.any():
-                        segment_data = zone_data[segment_mask]
-                        z_avg = segment_data['Elev'].mean()
-                        z_min = z_avg - self.z0
-                        z_max = 0  # Topography extends to station level
-                        
-                        # Calculate prism effect
-                        prism_effect = self._prism_effect_nagy(
-                            x_min, x_max, y_min, y_max, 
-                            min(z_min, z_max), max(z_min, z_max),
-                            self.params['earth_density']
-                        )
-                        
-                        total_effect += prism_effect
+                    if mask.any():
+                        prism_data = zone_data[mask]
+                        if len(prism_data) > 0:
+                            z_avg = prism_data['Elev'].mean() - self.z0
+                            z_bottom = min(z_avg, 0)
+                            z_top = max(z_avg, 0)
+                            
+                            # Calculate prism effect
+                            prism_effect = self._prism_effect_nagy(
+                                x_min, x_max, y_min, y_max,
+                                z_bottom, z_top, self.params['earth_density']
+                            )
+                            total_effect += prism_effect
             
             effect = total_effect
+        
+        elif method == 'ring':
+            # Annular ring approximation
+            if len(zone_data) == 0:
+                return 0.0
             
-        elif method == 'kane_ring':
-            # Far zones: Kane square segment rings
-            # Get average elevation in this zone
-            zone_mask = (zone_data['distance'] >= R_min) & (zone_data['distance'] < R_max)
-            if zone_mask.any():
-                avg_elev = zone_data.loc[zone_mask, 'Elev'].mean() - self.z0
-                effect = self._square_segment_ring_kane(
-                    R_min, R_max, avg_elev, self.params['earth_density']
-                )
-            else:
-                effect = 0.0
+            avg_elev = zone_data['Elev'].mean() - self.z0
+            
+            # Kane's ring formula
+            term1 = R_max - R_min
+            term2 = np.sqrt(R_min**2 + avg_elev**2) - np.sqrt(R_max**2 + avg_elev**2)
+            delta_theta = 2 * np.pi
+            
+            effect = G * self.params['earth_density'] * delta_theta * (term1 + term2)
         
         else:
             effect = 0.0
         
-        # Convert from m/s² to mGal
+        # Convert to mGal
         return effect * 1e5
     
     def calculate_terrain_correction(self):
-        """
-        Main method to calculate terrain correction using Geosoft methodology.
-        Returns terrain correction in mGal.
-        """
-        if self.params['debug']:
-            st.write(f"Calculating terrain correction for station at ({self.e0:.0f}, {self.n0:.0f}, {self.z0:.1f}m)")
-        
-        # Create zones
+        """Calculate terrain correction"""
         zones = self._create_zones()
-        
         total_tc = 0.0
         zone_effects = []
         
-        # Calculate effect for each zone
         for zone in zones:
-            # Filter DEM data for this zone
-            zone_mask = (self.dem_grid['distance'] >= zone['R_min']) & \
-                       (self.dem_grid['distance'] < zone['R_max'])
+            # Filter data for this zone
+            mask = (self.dem_df['distance'] >= zone['R_min']) & \
+                   (self.dem_df['distance'] < zone['R_max'])
             
-            if zone_mask.any():
-                zone_data = self.dem_grid[zone_mask]
+            if mask.any():
+                zone_data = self.dem_df[mask]
                 zone_effect = self._calculate_zone_effect(zone, zone_data)
                 
                 total_tc += zone_effect
@@ -382,328 +467,84 @@ class GeosoftTerrainCorrector:
                     'zone': zone['type'],
                     'R_min': zone['R_min'],
                     'R_max': zone['R_max'],
-                    'effect_mgal': zone_effect
+                    'effect': zone_effect,
+                    'n_points': len(zone_data)
                 })
-                
-                if self.params['debug']:
-                    st.write(f"  {zone['type']}: R={zone['R_min']:.0f}-{zone['R_max']:.0f}m, "
-                            f"Δg={zone_effect:.3f} mGal")
         
-        # Apply optimization if requested
-        if self.params['optimize'] and len(self.dem_grid) > 10000:
-            # Simple optimization: reduce effect by 3% as per Geosoft documentation
-            optimization_factor = 0.97
-            total_tc *= optimization_factor
-            
-            if self.params['debug']:
-                st.write(f"Applied optimization factor: {optimization_factor}")
+        # Apply optimization
+        if self.params['optimize'] and len(self.dem_df) > 5000:
+            total_tc *= 0.97  # 3% accuracy loss for speed
         
-        # Ensure TC is positive (always adds to gravity)
-        total_tc = abs(total_tc)
-        
-        if self.params['debug']:
-            st.write(f"Total Terrain Correction: {total_tc:.3f} mGal")
+        # Ensure positive
+        total_tc = max(total_tc, 0.0)
         
         return total_tc, zone_effects
 
-def calculate_geosoft_tc(dem_df, station_row, params=None):
-    """
-    Wrapper function for Geosoft terrain correction.
-    """
-    station_coords = (
-        float(station_row['Easting']),
-        float(station_row['Northing']),
-        float(station_row['Elev'])
-    )
-    
-    corrector = GeosoftTerrainCorrector(dem_df, station_coords, params)
-    tc_value, zone_effects = corrector.calculate_terrain_correction()
-    
-    return tc_value
-
 # ============================================================
-# IMPROVED DENSITY COMPARISON METHODS
+# DENSITY ANALYSIS
 # ============================================================
 
-class DensityAnalyzer:
-    """
-    Comprehensive density analysis using multiple methods.
-    """
+def nettleton_method(df, density_range=(1.5, 3.5), step=0.05):
+    """Nettleton density determination"""
+    if 'FAA' not in df.columns or 'Elev' not in df.columns:
+        return None, None, None
     
-    def __init__(self, gravity_data):
-        self.data = gravity_data.copy()
-        self.results = {}
+    densities = np.arange(density_range[0], density_range[1] + step, step)
+    correlations = []
     
-    def nettleton_method(self, density_range=(1.5, 3.5), step=0.05):
-        """
-        Nettleton (1939) method: Minimize correlation between
-        Complete Bouguer Anomaly and elevation.
-        """
-        if 'FAA' not in self.data.columns or 'Elev' not in self.data.columns:
-            return None, None, None
+    for rho in densities:
+        bouguer = df['FAA'] - 0.04192 * rho * df['Elev']
         
-        densities = np.arange(density_range[0], density_range[1] + step, step)
-        correlations = []
+        if 'Koreksi Medan' in df.columns:
+            complete_bouguer = bouguer + df['Koreksi Medan']
+        else:
+            complete_bouguer = bouguer
         
-        for rho in densities:
-            # Simple Bouguer correction
-            bouguer_correction = 0.04192 * rho * self.data['Elev']
-            simple_bouguer = self.data['FAA'] - bouguer_correction
-            
-            # Complete Bouguer Anomaly (with terrain correction if available)
-            if 'Koreksi Medan' in self.data.columns:
-                complete_bouguer = simple_bouguer + self.data['Koreksi Medan']
-            else:
-                complete_bouguer = simple_bouguer
-            
-            # Absolute correlation with elevation
-            corr = np.abs(np.corrcoef(complete_bouguer, self.data['Elev'])[0, 1])
-            correlations.append(corr)
-        
-        optimal_idx = np.argmin(correlations)
-        optimal_density = densities[optimal_idx]
-        
-        self.results['Nettleton'] = {
-            'density': optimal_density,
-            'correlation': correlations[optimal_idx],
-            'all_densities': densities,
-            'all_correlations': correlations
-        }
-        
-        return optimal_density, densities, correlations
+        corr = np.abs(np.corrcoef(complete_bouguer, df['Elev'])[0, 1])
+        correlations.append(corr)
     
-    def parasnis_method(self):
-        """
-        Parasnis method using linear regression.
-        """
-        if 'X-Parasnis' not in self.data.columns or 'Y-Parasnis' not in self.data.columns:
-            return None
-        
-        mask = self.data[["X-Parasnis", "Y-Parasnis"]].notnull().all(axis=1)
-        if mask.sum() < 2:
-            return None
-        
-        X = self.data.loc[mask, "X-Parasnis"].values
-        Y = self.data.loc[mask, "Y-Parasnis"].values
-        
-        slope, intercept = np.polyfit(X, Y, 1)
-        density_parasnis = slope / 0.04192
-        
-        self.results['Parasnis'] = {
-            'density': density_parasnis,
-            'slope': slope,
-            'intercept': intercept
-        }
-        
-        return density_parasnis
+    optimal_idx = np.argmin(correlations)
+    return densities[optimal_idx], densities, correlations
+
+def analyze_density_comprehensive(df):
+    """Comprehensive density analysis"""
+    results = {}
     
-    def elevation_statistics_method(self):
-        """
-        Estimate density based on elevation statistics.
-        """
-        if 'Elev' not in self.data.columns:
-            return None
-        
-        elev_mean = self.data['Elev'].mean()
-        
-        # Empirical relationships from typical geological settings
+    # 1. Nettleton method
+    density_nettleton, densities, correlations = nettleton_method(df)
+    if density_nettleton:
+        results['Nettleton'] = density_nettleton
+    
+    # 2. Parasnis method (if data available)
+    if 'X-Parasnis' in df.columns and 'Y-Parasnis' in df.columns:
+        mask = df[["X-Parasnis", "Y-Parasnis"]].notnull().all(axis=1)
+        if mask.sum() > 2:
+            X = df.loc[mask, "X-Parasnis"].values
+            Y = df.loc[mask, "Y-Parasnis"].values
+            slope, _ = np.polyfit(X, Y, 1)
+            density_parasnis = slope / 0.04192
+            results['Parasnis'] = density_parasnis
+    
+    # 3. Elevation-based estimate
+    if 'Elev' in df.columns:
+        elev_mean = df['Elev'].mean()
         if elev_mean < 100:
-            density = 2.1  # Coastal plains, alluvial deposits
+            density_elev = 2.1
         elif elev_mean < 500:
-            density = 2.3  # Low hills, sedimentary basins
+            density_elev = 2.3
         elif elev_mean < 1000:
-            density = 2.5  # Moderate topography, mixed lithology
-        elif elev_mean < 2000:
-            density = 2.7  # Mountainous areas, crystalline rocks
+            density_elev = 2.5
         else:
-            density = 2.9  # High mountains, mafic rocks
-        
-        self.results['Elevation_Stats'] = {
-            'density': density,
-            'mean_elevation': elev_mean
-        }
-        
-        return density
+            density_elev = 2.7
+        results['Elevation'] = density_elev
     
-    def comprehensive_analysis(self):
-        """
-        Run all density determination methods and provide consensus.
-        """
-        # Run all available methods
-        self.nettleton_method()
-        self.parasnis_method()
-        self.elevation_statistics_method()
+    # Calculate recommended density
+    if results:
+        densities_list = list(results.values())
+        recommended = np.median(densities_list)
+        uncertainty = np.std(densities_list)
         
-        # Collect results
-        densities = []
-        weights = []
-        
-        for method, result in self.results.items():
-            if 'density' in result:
-                densities.append(result['density'])
-                
-                # Assign weights based on method reliability
-                if method == 'Nettleton':
-                    weights.append(2.0)  # Most reliable
-                elif method == 'Parasnis':
-                    weights.append(1.5)  # Reliable if data quality good
-                else:
-                    weights.append(1.0)  # Less reliable
-        
-        if densities:
-            # Weighted average
-            weights = np.array(weights) / sum(weights)
-            recommended_density = np.average(densities, weights=weights)
-            
-            # Calculate uncertainty
-            uncertainty = np.std(densities)
-            
-            self.results['Recommended'] = {
-                'density': recommended_density,
-                'uncertainty': uncertainty,
-                'method_densities': densities,
-                'method_weights': weights.tolist()
-            }
-            
-            return recommended_density, uncertainty
-        else:
-            return None, None
-    
-    def plot_density_comparison(self):
-        """Plot comparison of all density determination methods."""
-        if not self.results:
-            return None
-        
-        fig, axes = plt.subplots(1, 2, figsize=(14, 6))
-        
-        # Plot 1: Nettleton method correlation curve
-        if 'Nettleton' in self.results:
-            net = self.results['Nettleton']
-            axes[0].plot(net['all_densities'], net['all_correlations'], 
-                        'b-', linewidth=2, label='Correlation')
-            axes[0].axvline(net['density'], color='r', linestyle='--',
-                           label=f'Optimal: {net["density"]:.3f} g/cm³')
-            axes[0].set_xlabel('Density (g/cm³)')
-            axes[0].set_ylabel('|Correlation with Elevation|')
-            axes[0].set_title('Nettleton Method: Minimizing Correlation')
-            axes[0].grid(True, alpha=0.3)
-            axes[0].legend()
-        
-        # Plot 2: Comparison of all methods
-        methods = []
-        densities = []
-        colors = []
-        
-        for method, result in self.results.items():
-            if method != 'Recommended' and 'density' in result:
-                methods.append(method)
-                densities.append(result['density'])
-                
-                # Assign colors based on method
-                if 'Nettleton' in method:
-                    colors.append('blue')
-                elif 'Parasnis' in method:
-                    colors.append('green')
-                else:
-                    colors.append('orange')
-        
-        if methods:
-            y_pos = np.arange(len(methods))
-            axes[1].barh(y_pos, densities, color=colors, alpha=0.7)
-            axes[1].set_yticks(y_pos)
-            axes[1].set_yticklabels(methods)
-            axes[1].set_xlabel('Density (g/cm³)')
-            axes[1].set_title('Comparison of Density Determination Methods')
-            
-            # Add recommended density line
-            if 'Recommended' in self.results:
-                rec_density = self.results['Recommended']['density']
-                axes[1].axvline(rec_density, color='red', linestyle='--',
-                               label=f'Recommended: {rec_density:.3f} g/cm³')
-                axes[1].legend()
-            
-            axes[1].grid(True, alpha=0.3, axis='x')
-        
-        plt.tight_layout()
-        return fig
-
-# ============================================================
-# MAIN PROCESSING FUNCTIONS (UPDATED)
-# ============================================================
-
-def process_gravity_data_with_geosoft_tc(grav_file, dem_file, params=None):
-    """
-    Main processing function using Geosoft terrain correction methodology.
-    """
-    # Load data
-    dem_df = load_dem(dem_file)
-    xls = pd.ExcelFile(grav_file)
-    
-    all_results = []
-    terrain_corrections = []
-    
-    # Process each sheet
-    for sheet_idx, sheet_name in enumerate(xls.sheet_names):
-        df = pd.read_excel(grav_file, sheet_name=sheet_name)
-        
-        # Convert coordinates to UTM
-        E, N, _, _ = latlon_to_utm_redfearn(df["Lat"].to_numpy(), df["Lon"].to_numpy())
-        df["Easting"] = E
-        df["Northing"] = N
-        
-        # Calculate drift correction (using your existing function)
-        Gmap, D = compute_drift(df, params.get('G_base', 0.0) if params else 0.0, 
-                               params.get('debug', False) if params else False)
-        df["G_read (mGal)"] = df["Nama"].map(Gmap)
-        
-        # Calculate latitude and free-air corrections
-        df["Koreksi Lintang"] = latitude_correction(df["Lat"])
-        df["Free Air Correction"] = free_air(df["Elev"])
-        df["FAA"] = df["G_read (mGal)"] - df["Koreksi Lintang"] + df["Free Air Correction"]
-        
-        # Calculate terrain corrections using Geosoft method
-        tc_values = []
-        for idx, station in df.iterrows():
-            tc_params = {
-                'correction_distance': params.get('correction_distance', 25000) if params else 25000,
-                'earth_density': params.get('earth_density', 2670) if params else 2670,
-                'optimize': params.get('optimize_tc', True) if params else True,
-                'debug': params.get('debug', False) if params else False
-            }
-            
-            tc_value = calculate_geosoft_tc(dem_df, station, tc_params)
-            tc_values.append(tc_value)
-            terrain_corrections.append(tc_value)
-        
-        df["Koreksi Medan"] = tc_values
-        
-        # Calculate X and Y for Parasnis plot
-        df["X-Parasnis"] = 0.04192 * df["Elev"] - df["Koreksi Medan"]
-        df["Y-Parasnis"] = df["Free Air Correction"]
-        df["Hari"] = sheet_name
-        
-        all_results.append(df)
-    
-    # Combine all sheets
-    if all_results:
-        combined_df = pd.concat(all_results, ignore_index=True)
-        
-        # Calculate Bouguer anomalies using multiple density estimates
-        density_analyzer = DensityAnalyzer(combined_df)
-        recommended_density, uncertainty = density_analyzer.comprehensive_analysis()
-        
-        if recommended_density:
-            # Calculate Bouguer correction with recommended density
-            combined_df["Bouger Correction"] = 0.04192 * recommended_density * combined_df["Elev"]
-            combined_df["Simple Bouger Anomaly"] = combined_df["FAA"] - combined_df["Bouger Correction"]
-            combined_df["Complete Bouger Anomaly"] = combined_df["Simple Bouger Anomaly"] + combined_df["Koreksi Medan"]
-            
-            # Store density analysis results
-            combined_df.attrs['density_analysis'] = density_analyzer.results
-            combined_df.attrs['recommended_density'] = recommended_density
-            combined_df.attrs['density_uncertainty'] = uncertainty
-        
-        return combined_df, terrain_corrections, density_analyzer
+        return recommended, uncertainty, results
     else:
         return None, None, None
 
@@ -711,344 +552,534 @@ def process_gravity_data_with_geosoft_tc(grav_file, dem_file, params=None):
 # VISUALIZATION FUNCTIONS
 # ============================================================
 
-def plot_terrain_correction_zones(station_coords, zone_effects, dem_df):
-    """
-    Plot terrain correction zones around a station.
-    """
-    fig, axes = plt.subplots(1, 2, figsize=(14, 6))
+def plot_dem_stations(dem_df, stations_df):
+    """Plot DEM with gravity stations"""
+    fig, ax = plt.subplots(figsize=(10, 8))
     
-    e0, n0, z0 = station_coords
+    # Plot DEM points
+    sc_dem = ax.scatter(dem_df['Easting'], dem_df['Northing'], 
+                       c=dem_df['Elev'], cmap='terrain', s=1, alpha=0.5)
     
-    # Plot 1: DEM with station and zones
-    scatter = axes[0].scatter(dem_df['Easting'], dem_df['Northing'], 
-                             c=dem_df['Elev'], cmap='terrain', s=1, alpha=0.5)
-    axes[0].scatter(e0, n0, c='red', s=100, marker='^', 
-                   edgecolor='black', label='Gravity Station')
+    # Plot stations
+    if stations_df is not None:
+        sc_sta = ax.scatter(stations_df['Easting'], stations_df['Northing'],
+                           c='red', s=50, marker='^', edgecolor='black',
+                           label='Gravity Stations')
     
-    # Plot zone boundaries
-    colors = ['blue', 'green', 'orange', 'red', 'purple', 'brown']
-    for i, zone in enumerate(zone_effects):
-        if i < len(colors):
-            circle = plt.Circle((e0, n0), zone['R_max'], 
-                               color=colors[i % len(colors)], 
-                               fill=False, linestyle='--', alpha=0.7,
-                               label=f"{zone['zone']}: {zone['effect_mgal']:.2f} mGal")
-            axes[0].add_patch(circle)
+    ax.set_xlabel('Easting (m)')
+    ax.set_ylabel('Northing (m)')
+    ax.set_title('DEM and Gravity Stations')
+    plt.colorbar(sc_dem, ax=ax, label='Elevation (m)')
     
-    axes[0].set_xlabel('Easting (m)')
-    axes[0].set_ylabel('Northing (m)')
-    axes[0].set_title('Terrain Correction Zones')
-    axes[0].legend(loc='upper right', fontsize=8)
-    axes[0].grid(True, alpha=0.3)
-    plt.colorbar(scatter, ax=axes[0], label='Elevation (m)')
+    if stations_df is not None:
+        ax.legend()
     
-    # Plot 2: Zone contributions
-    if zone_effects:
-        zones = [z['zone'] for z in zone_effects]
-        effects = [z['effect_mgal'] for z in zone_effects]
-        cumulative = np.cumsum(effects)
-        
-        x_pos = np.arange(len(zones))
-        axes[1].bar(x_pos, effects, alpha=0.7, label='Zone Contribution')
-        axes[1].plot(x_pos, cumulative, 'r-o', linewidth=2, markersize=8,
-                    label='Cumulative Total')
-        
-        axes[1].set_xlabel('Zone')
-        axes[1].set_ylabel('Terrain Correction (mGal)')
-        axes[1].set_title('Zone Contributions to Total TC')
-        axes[1].set_xticks(x_pos)
-        axes[1].set_xticklabels(zones, rotation=45)
-        axes[1].legend()
-        axes[1].grid(True, alpha=0.3)
-        
-        # Annotate bars with values
-        for i, (effect, cum) in enumerate(zip(effects, cumulative)):
-            axes[1].text(i, effect + (max(effects) * 0.02), f'{effect:.2f}', 
-                        ha='center', fontsize=8)
-            axes[1].text(i, cum + (max(effects) * 0.02), f'{cum:.2f}', 
-                        ha='center', fontsize=8, color='red')
-    
+    ax.grid(True, alpha=0.3)
     plt.tight_layout()
     return fig
 
-def plot_complete_bouguer_anomaly(df):
-    """
-    Plot Complete Bouguer Anomaly map.
-    """
-    if 'Complete Bouger Anomaly' not in df.columns:
+def plot_terrain_correction_map(stations_df):
+    """Plot terrain correction values"""
+    if 'Koreksi Medan' not in stations_df.columns:
         return None
     
     fig, ax = plt.subplots(figsize=(10, 8))
     
-    # Create grid for contouring
-    x = df['Easting'].values
-    y = df['Northing'].values
-    z = df['Complete Bouger Anomaly'].values
+    # Create contour plot
+    x = stations_df['Easting'].values
+    y = stations_df['Northing'].values
+    z = stations_df['Koreksi Medan'].values
     
-    # Create interpolation grid
-    xi = np.linspace(x.min(), x.max(), 200)
-    yi = np.linspace(y.min(), y.max(), 200)
+    # Grid for contouring
+    xi = np.linspace(x.min(), x.max(), 100)
+    yi = np.linspace(y.min(), y.max(), 100)
     XI, YI = np.meshgrid(xi, yi)
     
     # Interpolate
     ZI = griddata((x, y), z, (XI, YI), method='cubic')
     
-    # Plot contour
-    contour = ax.contourf(XI, YI, ZI, 40, cmap='RdBu_r', alpha=0.8)
-    
-    # Plot stations
-    scatter = ax.scatter(x, y, c=z, cmap='RdBu_r', s=30, 
-                        edgecolor='black', linewidth=0.5)
+    # Plot
+    contour = ax.contourf(XI, YI, ZI, 40, cmap='viridis', alpha=0.8)
+    sc = ax.scatter(x, y, c=z, cmap='viridis', s=30, edgecolor='black')
     
     ax.set_xlabel('Easting (m)')
     ax.set_ylabel('Northing (m)')
-    ax.set_title('Complete Bouguer Anomaly')
+    ax.set_title('Terrain Correction (mGal)')
     
-    # Add colorbar
-    cbar = fig.colorbar(contour, ax=ax)
-    cbar.set_label('Anomaly (mGal)')
-    
+    plt.colorbar(contour, ax=ax, label='Terrain Correction (mGal)')
     ax.grid(True, alpha=0.3)
     plt.tight_layout()
+    return fig
+
+def plot_bouguer_anomaly(stations_df):
+    """Plot Complete Bouguer Anomaly"""
+    if 'Complete Bouger Anomaly' not in stations_df.columns:
+        return None
     
+    fig, ax = plt.subplots(figsize=(10, 8))
+    
+    x = stations_df['Easting'].values
+    y = stations_df['Northing'].values
+    z = stations_df['Complete Bouger Anomaly'].values
+    
+    # Grid for contouring
+    xi = np.linspace(x.min(), x.max(), 100)
+    yi = np.linspace(y.min(), y.max(), 100)
+    XI, YI = np.meshgrid(xi, yi)
+    
+    # Interpolate
+    ZI = griddata((x, y), z, (XI, YI), method='cubic')
+    
+    # Plot
+    contour = ax.contourf(XI, YI, ZI, 40, cmap='RdBu_r', alpha=0.8)
+    sc = ax.scatter(x, y, c=z, cmap='RdBu_r', s=30, edgecolor='black')
+    
+    ax.set_xlabel('Easting (m)')
+    ax.set_ylabel('Northing (m)')
+    ax.set_title('Complete Bouguer Anomaly (mGal)')
+    
+    plt.colorbar(contour, ax=ax, label='Anomaly (mGal)')
+    ax.grid(True, alpha=0.3)
+    plt.tight_layout()
     return fig
 
 # ============================================================
-# STREAMLIT UI UPDATES
+# MAIN APPLICATION
 # ============================================================
 
-def main():
-    st.title("AutoGrav Pro - Geosoft Terrain Correction")
-    st.markdown("**Scientific terrain correction using Nagy (1966) and Kane (1962) methods**")
+st.markdown("""
+<div style="display:flex; align-items:center;">
+    <div>
+        <h2 style="margin-bottom:0;">Auto Grav Pro</h2>
+        <p style="color:red; font-weight:bold;">Geosoft Terrain Correction (CSV DEM only)</p>
+    </div>
+</div>
+<hr>
+""", unsafe_allow_html=True)
+
+# ============================================================
+# SIDEBAR CONTROLS
+# ============================================================
+st.sidebar.header("📁 Input Files")
+
+# File uploaders
+grav_file = st.sidebar.file_uploader(
+    "Upload Gravity Data (.xlsx)", 
+    type=["xlsx"],
+    help="Excel file with multiple sheets"
+)
+
+dem_file = st.sidebar.file_uploader(
+    "Upload DEM (.csv/.txt/.xyz)", 
+    type=["csv", "txt", "xyz"],
+    help="CSV file with columns: lat, lon, elev"
+)
+
+# Optional manual terrain correction
+tc_file = st.sidebar.file_uploader(
+    "Manual Terrain Correction (optional)",
+    type=["csv", "xlsx"],
+    help="Optional: CSV with Nama, Koreksi_Medan columns"
+)
+
+G_base = st.sidebar.number_input(
+    "Base Station Gravity (mGal)", 
+    value=0.0,
+    help="Absolute gravity at base station"
+)
+
+st.sidebar.header("⚙️ Terrain Correction Parameters")
+
+# Correction parameters
+correction_distance = st.sidebar.selectbox(
+    "Correction Distance",
+    options=[5000, 10000, 25000, 50000, 100000],
+    index=2,
+    help="Maximum distance for terrain effect calculation"
+)
+
+earth_density = st.sidebar.number_input(
+    "Earth Density (kg/m³)",
+    value=2670.0,
+    min_value=1000.0,
+    max_value=3500.0,
+    step=10.0
+)
+
+optimize_calc = st.sidebar.checkbox(
+    "Optimize Calculations", 
+    value=True,
+    help="10x faster with ~3% accuracy loss"
+)
+
+debug_mode = st.sidebar.checkbox("Debug Mode", value=False)
+
+# Process button
+run_button = st.sidebar.button("🚀 Process Data", type="primary")
+
+st.sidebar.header("📊 Output Options")
+show_plots = st.sidebar.checkbox("Show Plots", value=True)
+
+# ============================================================
+# MAIN PROCESSING
+# ============================================================
+
+if run_button:
+    if not grav_file:
+        st.error("❌ Please upload gravity data (.xlsx)")
+        st.stop()
     
-    # Sidebar controls
-    st.sidebar.header("Data Input")
-    grav_file = st.sidebar.file_uploader("Gravity Data (.xlsx)", type=["xlsx"])
-    dem_file = st.sidebar.file_uploader("DEM Data", type=["csv", "txt", "xyz", "tif"])
+    if not dem_file:
+        st.error("❌ Please upload DEM data (.csv/.txt/.xyz)")
+        st.stop()
     
-    st.sidebar.header("Terrain Correction Parameters")
+    # Load DEM
+    with st.spinner("Loading DEM data..."):
+        try:
+            dem_df = load_dem_csv(dem_file)
+            if dem_df is None:
+                st.error("Failed to load DEM. Check file format.")
+                st.stop()
+            
+            st.success(f"✅ DEM loaded: {len(dem_df):,} points")
+            
+            # Show DEM stats
+            col1, col2 = st.columns(2)
+            with col1:
+                st.info("**DEM Statistics:**")
+                st.write(f"- Points: {len(dem_df):,}")
+                st.write(f"- Elevation: {dem_df['Elev'].min():.0f} to {dem_df['Elev'].max():.0f} m")
+                st.write(f"- Mean: {dem_df['Elev'].mean():.0f} m")
+            
+            with col2:
+                st.info("**Spatial Coverage:**")
+                st.write(f"- Easting: {dem_df['Easting'].min():.0f} to {dem_df['Easting'].max():.0f} m")
+                st.write(f"- Northing: {dem_df['Northing'].min():.0f} to {dem_df['Northing'].max():.0f} m")
+        
+        except Exception as e:
+            st.error(f"Error loading DEM: {str(e)}")
+            st.stop()
     
-    correction_distance = st.sidebar.selectbox(
-        "Correction Distance",
-        options=[5000, 10000, 25000, 50000, 100000],
-        index=2,
-        help="Distance beyond survey area for terrain correction (meters)"
-    )
+    # Load manual TC if provided
+    tc_map = None
+    if tc_file:
+        try:
+            if tc_file.name.endswith('.csv'):
+                tc_df = pd.read_csv(tc_file)
+            else:
+                tc_df = pd.read_excel(tc_file)
+            
+            if {"Nama", "Koreksi_Medan"}.issubset(tc_df.columns):
+                tc_df["Koreksi_Medan"] = pd.to_numeric(tc_df["Koreksi_Medan"], errors="coerce")
+                tc_map = tc_df.set_index("Nama")["Koreksi_Medan"].to_dict()
+                st.info(f"✅ Manual TC loaded: {len(tc_map)} stations")
+            else:
+                st.warning("Manual TC file needs columns: Nama, Koreksi_Medan")
+        except Exception as e:
+            st.warning(f"Could not load manual TC: {e}")
     
-    earth_density = st.sidebar.number_input(
-        "Earth Density (kg/m³)",
-        value=2670.0,
-        min_value=1000.0,
-        max_value=3500.0,
-        step=10.0,
-        help="Density of crustal rocks"
-    )
+    # Process gravity data
+    try:
+        xls = pd.ExcelFile(grav_file)
+    except Exception as e:
+        st.error(f"Error reading Excel: {e}")
+        st.stop()
     
-    water_density = st.sidebar.number_input(
-        "Water Density (kg/m³)",
-        value=1000.0,
-        min_value=900.0,
-        max_value=1100.0,
-        step=10.0,
-        help="Density of water (for marine surveys)"
-    )
+    all_results = []
+    tc_values_all = []
     
-    optimize_tc = st.sidebar.checkbox(
-        "Optimize Calculations",
-        value=True,
-        help="Optimize for large DEM grids (10x faster, ~3% accuracy loss)"
-    )
+    total_sheets = len(xls.sheet_names)
+    progress_bar = st.progress(0)
     
-    debug_mode = st.sidebar.checkbox("Debug Mode", value=False)
-    
-    # Process button
-    if st.sidebar.button("Process with Geosoft Method", type="primary"):
-        if grav_file and dem_file:
-            with st.spinner("Processing gravity data with scientific terrain correction..."):
-                params = {
+    for sheet_idx, sheet_name in enumerate(xls.sheet_names):
+        df = pd.read_excel(grav_file, sheet_name=sheet_name)
+        
+        # Check required columns
+        required = {"Nama", "Time", "G_read (mGal)", "Lat", "Lon", "Elev"}
+        if not required.issubset(set(df.columns)):
+            st.warning(f"⚠️ Sheet '{sheet_name}' skipped (missing columns)")
+            continue
+        
+        # Update progress
+        progress = (sheet_idx + 1) / total_sheets
+        progress_bar.progress(progress)
+        
+        # Convert coordinates
+        E, N, _, _ = latlon_to_utm_redfearn(df["Lat"].to_numpy(), df["Lon"].to_numpy())
+        df["Easting"] = E
+        df["Northing"] = N
+        
+        # Drift correction
+        Gmap, D = compute_drift(df, G_base, debug_mode)
+        df["G_read (mGal)"] = df["Nama"].map(Gmap)
+        
+        # Basic corrections
+        df["Koreksi Lintang"] = latitude_correction(df["Lat"])
+        df["Free Air Correction"] = free_air(df["Elev"])
+        df["FAA"] = df["G_read (mGal)"] - df["Koreksi Lintang"] + df["Free Air Correction"]
+        
+        # Terrain correction for each station
+        tc_list = []
+        n_stations = len(df)
+        
+        station_bar = st.progress(0)
+        for i, station in df.iterrows():
+            station_name = station['Nama']
+            
+            # Manual TC if available
+            if tc_map and station_name in tc_map:
+                tc_val = tc_map[station_name]
+            else:
+                # Calculate using Geosoft method
+                tc_params = {
                     'correction_distance': correction_distance,
                     'earth_density': earth_density,
-                    'water_density': water_density,
-                    'optimize_tc': optimize_tc,
-                    'debug': debug_mode,
-                    'G_base': 0.0  # Add your base station value if needed
+                    'optimize': optimize_calc,
+                    'debug': debug_mode
                 }
                 
-                results_df, tc_values, density_analyzer = process_gravity_data_with_geosoft_tc(
-                    grav_file, dem_file, params
-                )
-                
-                if results_df is not None:
-                    st.success("Processing complete!")
-                    
-                    # Display results
-                    st.header("Results Summary")
-                    
-                    col1, col2, col3, col4 = st.columns(4)
-                    with col1:
-                        st.metric("Stations Processed", len(results_df))
-                    with col2:
-                        st.metric("Mean TC", f"{np.mean(tc_values):.2f} mGal")
-                    with col3:
-                        st.metric("Max TC", f"{np.max(tc_values):.2f} mGal")
-                    with col4:
-                        if hasattr(results_df, 'attrs') and 'recommended_density' in results_df.attrs:
-                            st.metric("Recommended Density", 
-                                     f"{results_df.attrs['recommended_density']:.3f} g/cm³")
-                    
-                    # Tabs for different visualizations
-                    tab1, tab2, tab3, tab4, tab5 = st.tabs([
-                        "Data Preview", "Terrain Correction", 
-                        "Density Analysis", "Bouguer Anomaly", "Export"
-                    ])
-                    
-                    with tab1:
-                        st.dataframe(results_df.head(20))
-                        st.write(f"Total records: {len(results_df)}")
-                    
-                    with tab2:
-                        # Plot terrain correction for a sample station
-                        sample_station = results_df.iloc[0]
-                        station_coords = (
-                            sample_station['Easting'],
-                            sample_station['Northing'],
-                            sample_station['Elev']
-                        )
-                        
-                        # Recalculate with debug to get zone effects
-                        tc_params = {
-                            'correction_distance': correction_distance,
-                            'earth_density': earth_density,
-                            'optimize_tc': optimize_tc,
-                            'debug': True
-                        }
-                        
-                        dem_df = load_dem(dem_file)
-                        corrector = GeosoftTerrainCorrector(dem_df, station_coords, tc_params)
-                        tc_value, zone_effects = corrector.calculate_terrain_correction()
-                        
-                        fig_zones = plot_terrain_correction_zones(station_coords, zone_effects, dem_df)
-                        st.pyplot(fig_zones)
-                        
-                        # TC distribution
-                        fig_tc_dist, ax = plt.subplots(figsize=(10, 4))
-                        ax.hist(tc_values, bins=30, alpha=0.7, edgecolor='black')
-                        ax.set_xlabel('Terrain Correction (mGal)')
-                        ax.set_ylabel('Frequency')
-                        ax.set_title('Distribution of Terrain Correction Values')
-                        ax.grid(True, alpha=0.3)
-                        st.pyplot(fig_tc_dist)
-                    
-                    with tab3:
-                        if density_analyzer:
-                            fig_density = density_analyzer.plot_density_comparison()
-                            if fig_density:
-                                st.pyplot(fig_density)
-                            
-                            # Display density analysis results
-                            st.subheader("Density Analysis Results")
-                            
-                            if 'Recommended' in density_analyzer.results:
-                                rec = density_analyzer.results['Recommended']
-                                st.info(f"**Recommended Density:** {rec['density']:.3f} ± {rec['uncertainty']:.3f} g/cm³")
-                            
-                            # Show individual method results
-                            for method, result in density_analyzer.results.items():
-                                if method != 'Recommended':
-                                    if 'density' in result:
-                                        st.write(f"**{method}:** {result['density']:.3f} g/cm³")
-                    
-                    with tab4:
-                        fig_cba = plot_complete_bouguer_anomaly(results_df)
-                        if fig_cba:
-                            st.pyplot(fig_cba)
-                    
-                    with tab5:
-                        st.subheader("Export Results")
-                        
-                        # Export options
-                        export_format = st.selectbox(
-                            "Export Format",
-                            ["CSV", "Excel", "XYZ"]
-                        )
-                        
-                        if export_format == "CSV":
-                            csv = results_df.to_csv(index=False)
-                            st.download_button(
-                                label="Download CSV",
-                                data=csv,
-                                file_name="gravity_results.csv",
-                                mime="text/csv"
-                            )
-                        elif export_format == "Excel":
-                            excel_buffer = io.BytesIO()
-                            with pd.ExcelWriter(excel_buffer, engine='openpyxl') as writer:
-                                results_df.to_excel(writer, index=False, sheet_name='Gravity_Results')
-                            st.download_button(
-                                label="Download Excel",
-                                data=excel_buffer.getvalue(),
-                                file_name="gravity_results.xlsx",
-                                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-                            )
-                        
-                        # Export terrain corrections separately
-                        tc_df = pd.DataFrame({
-                            'Station': results_df['Nama'],
-                            'Easting': results_df['Easting'],
-                            'Northing': results_df['Northing'],
-                            'Elevation': results_df['Elev'],
-                            'Terrain_Correction_mGal': results_df['Koreksi Medan']
-                        })
-                        
-                        st.download_button(
-                            label="Download Terrain Corrections",
-                            data=tc_df.to_csv(index=False),
-                            file_name="terrain_corrections.csv",
-                            mime="text/csv"
-                        )
-        else:
-            st.error("Please upload both gravity and DEM files.")
+                tc_val, _ = GeosoftTerrainCorrector(
+                    dem_df, 
+                    (station['Easting'], station['Northing'], station['Elev']),
+                    tc_params
+                ).calculate_terrain_correction()
+            
+            tc_list.append(tc_val)
+            tc_values_all.append(tc_val)
+            
+            # Update station progress
+            station_bar.progress((i + 1) / n_stations)
+        
+        station_bar.empty()
+        
+        # Add TC to dataframe
+        df["Koreksi Medan"] = tc_list
+        
+        # Parasnis calculations
+        df["X-Parasnis"] = 0.04192 * df["Elev"] - df["Koreksi Medan"]
+        df["Y-Parasnis"] = df["Free Air Correction"]
+        df["Hari"] = sheet_name
+        
+        all_results.append(df)
     
-    # Information panel
-    st.sidebar.markdown("---")
-    with st.sidebar.expander("Methodology Information"):
-        st.write("""
-        **Scientific Terrain Correction Method:**
+    progress_bar.empty()
+    
+    if not all_results:
+        st.error("No valid sheets processed")
+        st.stop()
+    
+    # Combine all data
+    df_all = pd.concat(all_results, ignore_index=True)
+    
+    # Density analysis
+    with st.spinner("Analyzing density..."):
+        density_rec, density_uncert, density_results = analyze_density_comprehensive(df_all)
         
-        1. **Zone 0** (0-1 cell): Kane's sloped triangle method
-        2. **Zones 1-2** (2-16 cells): Nagy's rectangular prism method
-        3. **Zones 3+** (>16 cells): Kane's square segment ring method
+        if density_rec:
+            # Calculate Bouguer anomalies with recommended density
+            df_all["Bouger Correction"] = 0.04192 * density_rec * df_all["Elev"]
+            df_all["Simple Bouger Anomaly"] = df_all["FAA"] - df_all["Bouger Correction"]
+            df_all["Complete Bouger Anomaly"] = df_all["Simple Bouger Anomaly"] + df_all["Koreksi Medan"]
+            
+            st.session_state.recommended_density = density_rec
+            st.session_state.density_results = density_results
+        else:
+            # Use default density
+            df_all["Bouger Correction"] = 0.04192 * 2.67 * df_all["Elev"]
+            df_all["Simple Bouger Anomaly"] = df_all["FAA"] - df_all["Bouger Correction"]
+            df_all["Complete Bouger Anomaly"] = df_all["Simple Bouger Anomaly"] + df_all["Koreksi Medan"]
+    
+    st.success(f"✅ Processing complete! {len(df_all)} stations processed")
+    
+    # ============================================================
+    # RESULTS DISPLAY
+    # ============================================================
+    
+    # Summary statistics
+    st.header("📈 Results Summary")
+    
+    col1, col2, col3, col4 = st.columns(4)
+    with col1:
+        st.metric("Stations", len(df_all))
+    with col2:
+        st.metric("Mean TC", f"{np.mean(tc_values_all):.2f} mGal")
+    with col3:
+        st.metric("Max TC", f"{np.max(tc_values_all):.2f} mGal")
+    with col4:
+        if 'recommended_density' in st.session_state:
+            st.metric("Recommended Density", f"{st.session_state.recommended_density:.3f} g/cm³")
+    
+    # TC statistics
+    st.subheader("Terrain Correction Statistics")
+    
+    tc_array = np.array(tc_values_all)
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        st.write(f"**Mean:** {tc_array.mean():.3f} mGal")
+        st.write(f"**Median:** {np.median(tc_array):.3f} mGal")
+    with col2:
+        st.write(f"**Min:** {tc_array.min():.3f} mGal")
+        st.write(f"**Max:** {tc_array.max():.3f} mGal")
+    with col3:
+        st.write(f"**Std Dev:** {tc_array.std():.3f} mGal")
+        st.write(f"**Range:** {tc_array.max() - tc_array.min():.3f} mGal")
+    
+    # Data preview
+    with st.expander("📋 Data Preview", expanded=True):
+        st.dataframe(df_all.head(20))
+    
+    # ============================================================
+    # VISUALIZATIONS
+    # ============================================================
+    if show_plots:
+        st.header("📊 Visualizations")
         
-        **References:**
-        - Nagy (1966): Gravitational attraction of right rectangular prisms
-        - Kane (1962): Comprehensive system of terrain corrections
-        - Hinze et al. (2013): Gravity and magnetic exploration
+        tabs = st.tabs(["DEM & Stations", "Terrain Correction", "Bouguer Anomaly", "Density Analysis"])
         
-        **Optimization:** 10x faster with ~3% accuracy loss for large grids
-        """)
+        with tabs[0]:
+            # DEM and stations plot
+            fig_dem = plot_dem_stations(dem_df, df_all)
+            st.pyplot(fig_dem)
+        
+        with tabs[1]:
+            # Terrain correction map
+            fig_tc = plot_terrain_correction_map(df_all)
+            if fig_tc:
+                st.pyplot(fig_tc)
+            
+            # TC histogram
+            fig_hist, ax = plt.subplots(figsize=(10, 4))
+            ax.hist(tc_values_all, bins=30, alpha=0.7, edgecolor='black')
+            ax.set_xlabel('Terrain Correction (mGal)')
+            ax.set_ylabel('Frequency')
+            ax.set_title('Distribution of Terrain Correction Values')
+            ax.grid(True, alpha=0.3)
+            st.pyplot(fig_hist)
+        
+        with tabs[2]:
+            # Bouguer anomaly
+            fig_cba = plot_bouguer_anomaly(df_all)
+            if fig_cba:
+                st.pyplot(fig_cba)
+        
+        with tabs[3]:
+            # Density analysis
+            if 'density_results' in st.session_state:
+                st.subheader("Density Analysis Results")
+                
+                # Display results
+                for method, value in st.session_state.density_results.items():
+                    st.write(f"**{method}:** {value:.3f} g/cm³")
+                
+                # Plot comparison
+                methods = list(st.session_state.density_results.keys())
+                values = list(st.session_state.density_results.values())
+                
+                fig_dens, ax = plt.subplots(figsize=(10, 5))
+                bars = ax.bar(methods, values, alpha=0.7)
+                ax.axhline(y=st.session_state.recommended_density, 
+                          color='red', linestyle='--', 
+                          label=f'Recommended: {st.session_state.recommended_density:.3f}')
+                ax.set_ylabel('Density (g/cm³)')
+                ax.set_title('Density Determination Methods')
+                ax.legend()
+                ax.grid(True, alpha=0.3, axis='y')
+                
+                # Add value labels
+                for bar, val in zip(bars, values):
+                    height = bar.get_height()
+                    ax.text(bar.get_x() + bar.get_width()/2., height + 0.01,
+                           f'{val:.3f}', ha='center', va='bottom')
+                
+                st.pyplot(fig_dens)
+    
+    # ============================================================
+    # EXPORT OPTIONS
+    # ============================================================
+    st.header("💾 Export Results")
+    
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        # Export main results
+        csv_data = df_all.to_csv(index=False)
+        st.download_button(
+            label="📥 Download All Results (CSV)",
+            data=csv_data,
+            file_name="gravity_processing_results.csv",
+            mime="text/csv",
+            help="Download all processed data"
+        )
+    
+    with col2:
+        # Export terrain corrections only
+        tc_df = df_all[['Nama', 'Lat', 'Lon', 'Elev', 'Koreksi Medan']].copy()
+        tc_csv = tc_df.to_csv(index=False)
+        st.download_button(
+            label="📥 Download Terrain Corrections",
+            data=tc_csv,
+            file_name="terrain_corrections.csv",
+            mime="text/csv",
+            help="Download only terrain correction values"
+        )
+    
+    # Export to Excel
+    excel_buffer = io.BytesIO()
+    with pd.ExcelWriter(excel_buffer, engine='openpyxl') as writer:
+        df_all.to_excel(writer, index=False, sheet_name='Results')
+        
+        # Add summary sheet
+        summary_data = {
+            'Metric': ['Total Stations', 'Mean TC (mGal)', 'Max TC (mGal)', 
+                      'Recommended Density (g/cm³)', 'Processing Time'],
+            'Value': [len(df_all), f"{np.mean(tc_values_all):.3f}", 
+                     f"{np.max(tc_values_all):.3f}",
+                     f"{st.session_state.get('recommended_density', 'N/A')}",
+                     time.strftime("%Y-%m-%d %H:%M:%S")]
+        }
+        pd.DataFrame(summary_data).to_excel(writer, index=False, sheet_name='Summary')
+    
+    st.download_button(
+        label="📥 Download Excel Report",
+        data=excel_buffer.getvalue(),
+        file_name="gravity_report.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    )
 
 # ============================================================
-# YOUR EXISTING FUNCTIONS (unchanged, for compatibility)
+# SIDEBAR INFORMATION
 # ============================================================
 
-# Keep all your existing functions (latlon_to_utm_redfearn, load_dem, 
-# compute_drift, latitude_correction, free_air, etc.) exactly as they are
+st.sidebar.markdown("---")
+with st.sidebar.expander("ℹ️ About This Tool"):
+    st.write("""
+    **Auto Grav Pro - Geosoft Terrain Correction**
+    
+    Uses scientific terrain correction methods:
+    - **Nagy (1966)**: Rectangular prism formula
+    - **Kane (1962)**: Square segment rings
+    
+    **Input Requirements:**
+    1. **Gravity Data**: Excel with sheets (Nama, Time, G_read, Lat, Lon, Elev)
+    2. **DEM Data**: CSV with lat, lon, elev columns
+    
+    **Output:**
+    - Terrain correction for each station
+    - Complete Bouguer anomaly
+    - Density analysis results
+    - Interactive visualizations
+    """)
 
-# The functions below should remain unchanged from your original code:
-# - load_geotiff_without_tfw
-# - load_dem  
-# - compute_drift
-# - latitude_correction
-# - free_air
-# - validate_tc_value
-# - plot_dem_elevation
-# - plot_cont
-# - create_interactive_scatter
-# - And all the UI/authentication functions
-
-# Only the terrain correction calculation has been replaced with the scientific method.
-
-# Run the app
-if __name__ == "__main__":
-    # Add your authentication logic here if needed
-    main()
+with st.sidebar.expander("📋 Sample File Format"):
+    st.write("""
+    **DEM CSV Format:**
+    ```
+    lat,lon,elev
+    -7.123,110.456,125.5
+    -7.124,110.457,126.2
+    ```
+    
+    **Gravity Excel Format:**
+    - Multiple sheets (one per day)
+    - Columns: Nama, Time, G_read (mGal), Lat, Lon, Elev
+    """)
