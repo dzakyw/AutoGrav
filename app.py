@@ -1600,7 +1600,7 @@ if run:
     with tab3:
         if len(df_all) > 0:
             fig_cba = plot_cont(df_all["Easting"], df_all["Northing"], 
-                               df_all["Complete Bouger Anomaly"], 
+                               df_all["Complete Bouger Anomaly Optimal"], 
                                "Complete Bouguer Anomaly")
             st.pyplot(fig_cba)
         else:
@@ -1736,6 +1736,7 @@ with st.sidebar.expander("Koreksi yang dilakukan"):
     4. **Debug function** for high slopes
     5. **Keep original X-Parasnis formula**: X = 0.04192 * Elev - TC
     """)
+
 
 
 
