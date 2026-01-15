@@ -889,8 +889,7 @@ def comprehensive_density_analysis(df, debug=True):
     Analisis densitas komprehensif dengan berbagai metode.
     TANPA METODE PARASNIS.
     """
-        st.subheader("🔄 Analisis Densitas Komprehensif")
-    
+    st.subheader("🔄 Analisis Densitas Komprehensif")
     results = {}
     
     # 1. Metode Nettleton
@@ -1817,6 +1816,7 @@ with st.sidebar.expander("Koreksi yang dilakukan"):
     4. **Debug function** for high slopes
     5. **Keep original X-Parasnis formula**: X = 0.04192 * Elev - TC
     """)
+
 
 
 
