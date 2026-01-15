@@ -1633,102 +1633,37 @@ if run:
             st.subheader("⚙️ Pilih Densitas untuk Perhitungan Final")
             
             col1, col2, col3 = st.columns(3)
+            use_other = False
+            other_density = optimal_density
+            selected_method = "Nettleton"
             
             with col1:
-                # Inisialisasi pilihan di session state
-                if 'use_optimal_density' not in st.session_state:
-                    st.session_state.use_optimal_density = True
-                    st.session_state.use_other_method = False
-                    st.session_state.use_custom_density = False
-                
-                # Checkbox untuk pilihan
-                use_optimal = st.checkbox(
-                    "Gunakan densitas optimal",
-                    value=st.session_state.use_optimal_density,
-                    key='use_optimal_checkbox'
-                )
-                
-                # Update state berdasarkan pilihan
-                if use_optimal:
-                    st.session_state.use_optimal_density = True
-                    st.session_state.use_other_method = False
-                    st.session_state.use_custom_density = False
-            
+                use_optimal = st.checkbox("Gunakan densitas optimal", value=True)
             with col2:
                 # Tampilkan metode lain jika tersedia
                 if density_results is not None and len(density_results) > 1:
-                    # Inisialisasi di session state
-                    if 'selected_method' not in st.session_state:
-                        st.session_state.selected_method = density_results['Metode'].iloc[0]
-                    
-                    selected_method = st.selectbox(
-                        "Pilih metode lain:",
-                        options=density_results['Metode'].tolist(),
-                        index=density_results['Metode'].tolist().index(st.session_state.selected_method),
-                        key='method_select'
-                    )
-                    
-                    # Update session state
-                    st.session_state.selected_method = selected_method
-                    
-                    # Dapatkan densitas untuk metode yang dipilih
-                    other_density = density_results[density_results['Metode'] == selected_method]['Densitas (g/cm³)'].values[0]
-                    
-                    # Checkbox untuk menggunakan metode ini
-                    use_other = st.checkbox(
-                        f"Gunakan {selected_method}",
-                        value=st.session_state.use_other_method,
-                        key='use_other_checkbox'
-                    )
-                    
-                    if use_other:
-                        st.session_state.use_optimal_density = False
-                        st.session_state.use_other_method = True
-                        st.session_state.use_custom_density = False
-                        
-                        st.info(f"Densitas: {other_density:.3f} g/cm³")
-                else:
-                    st.warning("Tidak ada metode lain tersedia")
-            
+                    other_methods = density_results[density_results['Metode'] != 'Nettleton']
+                    if len(other_methods) > 0:
+                        selected_method = st.selectbox(
+                            "Pilih metode lain",
+                            options=other_methods['Metode'].tolist()
+                        )
+                        other_density = other_methods[other_methods['Metode'] == selected_method]['Densitas (g/cm³)'].values[0]
+                        use_other = st.checkbox(f"Gunakan {selected_method}", value=False)
             with col3:
-                # Inisialisasi di session state
-                if 'custom_density_value' not in st.session_state:
-                    st.session_state.custom_density_value = float(optimal_density)
-                
-                custom_density = st.number_input(
-                    "Densitas kustom (g/cm³)", 
-                    value=st.session_state.custom_density_value,
-                    min_value=1.0, 
-                    max_value=4.0, 
-                    step=0.01,
-                    key='custom_density'
-                )
-                
-                # Update session state
-                st.session_state.custom_density_value = custom_density
-                
-                # Checkbox untuk menggunakan densitas kustom
-                use_custom = st.checkbox(
-                    "Gunakan densitas kustom",
-                    value=st.session_state.use_custom_density,
-                    key='use_custom_checkbox'
-                )
-                
-                if use_custom:
-                    st.session_state.use_optimal_density = False
-                    st.session_state.use_other_method = False
-                    st.session_state.use_custom_density = True
+                custom_density = st.number_input("Densitas kustom (g/cm³)", 
+                                                value=float(optimal_density), 
+                                                min_value=1.0, max_value=4.0, step=0.01)
             
-            # Tentukan densitas final berdasarkan pilihan
-            if st.session_state.use_optimal_density:
+            if use_optimal:
                 final_density = optimal_density
-                st.success(f"✅ Menggunakan densitas optimal (median): {final_density:.3f} g/cm³")
-            elif st.session_state.use_other_method:
+                st.success(f"Menggunakan densitas optimal (median): {final_density:.3f} g/cm³")
+            elif use_other:
                 final_density = other_density
-                st.info(f"📊 Menggunakan densitas dari {st.session_state.selected_method}: {final_density:.3f} g/cm³")
+                st.info(f"Menggunakan densitas dari {selected_method}: {final_density:.3f} g/cm³")
             else:
-                final_density = st.session_state.custom_density_value
-                st.warning(f"🔧 Menggunakan densitas kustom: {final_density:.3f} g/cm³")
+                final_density = custom_density
+                st.warning(f"Menggunakan densitas kustom: {final_density:.3f} g/cm³")
             
             # Perhitungan final dengan densitas terpilih
             df_all["Bouger Correction Final"] = 0.04192 * final_density * df_all["Elev"]
@@ -1801,6 +1736,7 @@ with st.sidebar.expander("Koreksi yang dilakukan"):
     4. **Debug function** for high slopes
     5. **Keep original X-Parasnis formula**: X = 0.04192 * Elev - TC
     """)
+
 
 
 
