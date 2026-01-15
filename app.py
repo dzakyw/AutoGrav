@@ -1632,124 +1632,139 @@ if run:
             # Opsi untuk menggunakan densitas yang berbeda
             st.subheader("⚙️ Pilih Densitas untuk Perhitungan Final")
             
-            # Inisialisasi session state untuk pilihan densitas
-            if 'density_choice' not in st.session_state:
-                st.session_state.density_choice = 'optimal'
-                st.session_state.selected_method = 'Nettleton'
-                st.session_state.custom_density = float(optimal_density)
-            
             col1, col2, col3 = st.columns(3)
             
             with col1:
-                # Pilihan metode
-                density_options = ['optimal', 'other_method', 'custom']
-                choice = st.radio(
-                    "Pilih sumber densitas:",
-                    options=density_options,
-                    index=density_options.index(st.session_state.density_choice),
-                    key='density_choice_radio'
+                # Inisialisasi pilihan di session state
+                if 'use_optimal_density' not in st.session_state:
+                    st.session_state.use_optimal_density = True
+                    st.session_state.use_other_method = False
+                    st.session_state.use_custom_density = False
+                
+                # Checkbox untuk pilihan
+                use_optimal = st.checkbox(
+                    "Gunakan densitas optimal",
+                    value=st.session_state.use_optimal_density,
+                    key='use_optimal_checkbox'
                 )
                 
-                # Update session state
-                st.session_state.density_choice = choice
+                # Update state berdasarkan pilihan
+                if use_optimal:
+                    st.session_state.use_optimal_density = True
+                    st.session_state.use_other_method = False
+                    st.session_state.use_custom_density = False
             
             with col2:
                 # Tampilkan metode lain jika tersedia
                 if density_results is not None and len(density_results) > 1:
-                    # Buat dictionary metode -> densitas
-                    method_dict = dict(zip(density_results['Metode'], density_results['Densitas (g/cm³)']))
+                    # Inisialisasi di session state
+                    if 'selected_method' not in st.session_state:
+                        st.session_state.selected_method = density_results['Metode'].iloc[0]
                     
                     selected_method = st.selectbox(
-                        "Pilih metode:",
-                        options=list(method_dict.keys()),
-                        index=list(method_dict.keys()).index(st.session_state.selected_method) 
-                        if st.session_state.selected_method in method_dict.keys() else 0,
-                        key='method_selectbox'
+                        "Pilih metode lain:",
+                        options=density_results['Metode'].tolist(),
+                        index=density_results['Metode'].tolist().index(st.session_state.selected_method),
+                        key='method_select'
                     )
                     
                     # Update session state
                     st.session_state.selected_method = selected_method
-                    other_density = method_dict[selected_method]
                     
-                    st.info(f"{selected_method}: {other_density:.3f} g/cm³")
+                    # Dapatkan densitas untuk metode yang dipilih
+                    other_density = density_results[density_results['Metode'] == selected_method]['Densitas (g/cm³)'].values[0]
+                    
+                    # Checkbox untuk menggunakan metode ini
+                    use_other = st.checkbox(
+                        f"Gunakan {selected_method}",
+                        value=st.session_state.use_other_method,
+                        key='use_other_checkbox'
+                    )
+                    
+                    if use_other:
+                        st.session_state.use_optimal_density = False
+                        st.session_state.use_other_method = True
+                        st.session_state.use_custom_density = False
+                        
+                        st.info(f"Densitas: {other_density:.3f} g/cm³")
                 else:
                     st.warning("Tidak ada metode lain tersedia")
             
             with col3:
-                # Input densitas kustom
+                # Inisialisasi di session state
+                if 'custom_density_value' not in st.session_state:
+                    st.session_state.custom_density_value = float(optimal_density)
+                
                 custom_density = st.number_input(
                     "Densitas kustom (g/cm³)", 
-                    value=st.session_state.custom_density,
+                    value=st.session_state.custom_density_value,
                     min_value=1.0, 
                     max_value=4.0, 
                     step=0.01,
-                    key='custom_density_input'
+                    key='custom_density'
                 )
                 
                 # Update session state
-                st.session_state.custom_density = custom_density
+                st.session_state.custom_density_value = custom_density
+                
+                # Checkbox untuk menggunakan densitas kustom
+                use_custom = st.checkbox(
+                    "Gunakan densitas kustom",
+                    value=st.session_state.use_custom_density,
+                    key='use_custom_checkbox'
+                )
+                
+                if use_custom:
+                    st.session_state.use_optimal_density = False
+                    st.session_state.use_other_method = False
+                    st.session_state.use_custom_density = True
             
             # Tentukan densitas final berdasarkan pilihan
-            if st.session_state.density_choice == 'optimal':
+            if st.session_state.use_optimal_density:
                 final_density = optimal_density
                 st.success(f"✅ Menggunakan densitas optimal (median): {final_density:.3f} g/cm³")
-            elif st.session_state.density_choice == 'other_method':
+            elif st.session_state.use_other_method:
                 final_density = other_density
                 st.info(f"📊 Menggunakan densitas dari {st.session_state.selected_method}: {final_density:.3f} g/cm³")
             else:
-                final_density = st.session_state.custom_density
+                final_density = st.session_state.custom_density_value
                 st.warning(f"🔧 Menggunakan densitas kustom: {final_density:.3f} g/cm³")
             
-            # Button untuk konfirmasi pilihan
-            if st.button("Terapkan Densitas Ini", type="primary"):
-                st.session_state.final_density_applied = final_density
-                st.rerun()
+            # Perhitungan final dengan densitas terpilih
+            df_all["Bouger Correction Final"] = 0.04192 * final_density * df_all["Elev"]
+            df_all["Simple Bouger Anomaly Final"] = df_all["FAA"] - df_all["Bouger Correction Final"]
+            df_all["Complete Bouger Anomaly Final"] = df_all["Simple Bouger Anomaly Final"] + df_all["Koreksi Medan"]
             
-            # Jika densitas sudah diterapkan, lakukan perhitungan
-            if 'final_density_applied' in st.session_state:
-                final_density = st.session_state.final_density_applied
-                
-                # Perhitungan final dengan densitas terpilih
-                df_all["Bouger Correction Final"] = 0.04192 * final_density * df_all["Elev"]
-                df_all["Simple Bouger Anomaly Final"] = df_all["FAA"] - df_all["Bouger Correction Final"]
-                df_all["Complete Bouger Anomaly Final"] = df_all["Simple Bouger Anomaly Final"] + df_all["Koreksi Medan"]
-                
-                # Tampilkan statistik
-                st.subheader("📈 Statistik Anomali Bouguer Final")
-                
-                col1, col2, col3, col4 = st.columns(4)
-                with col1:
-                    st.metric("Min CBA", f"{df_all['Complete Bouger Anomaly Final'].min():.1f} mGal")
-                with col2:
-                    st.metric("Max CBA", f"{df_all['Complete Bouger Anomaly Final'].max():.1f} mGal")
-                with col3:
-                    st.metric("Mean CBA", f"{df_all['Complete Bouger Anomaly Final'].mean():.1f} mGal")
-                with col4:
-                    st.metric("Std Dev CBA", f"{df_all['Complete Bouger Anomaly Final'].std():.1f} mGal")
-                
-                # Plot distribusi CBA final
-                fig_cba_final, ax_cba_final = plt.subplots(figsize=(10, 5))
-                ax_cba_final.hist(df_all['Complete Bouger Anomaly Final'], bins=30, 
-                                 alpha=0.7, edgecolor='black', color='green')
-                ax_cba_final.axvline(df_all['Complete Bouger Anomaly Final'].mean(), 
-                                   color='red', linestyle='--',
-                                   label=f'Mean: {df_all["Complete Bouger Anomaly Final"].mean():.1f} mGal')
-                ax_cba_final.set_xlabel('Complete Bouguer Anomaly (mGal)')
-                ax_cba_final.set_ylabel('Frequency')
-                ax_cba_final.set_title(f'Distribusi CBA Final (ρ = {final_density:.3f} g/cm³)')
-                ax_cba_final.legend()
-                ax_cba_final.grid(True, alpha=0.3)
-                st.pyplot(fig_cba_final)
-                
-                # Simpan densitas final ke session state
-                st.session_state.final_density = final_density
-                st.session_state.density_results = density_results
-                
-                # Tombol reset
-                if st.button("Reset Pilihan Densitas"):
-                    if 'final_density_applied' in st.session_state:
-                        del st.session_state.final_density_applied
-                    st.rerun()
+            # Tampilkan statistik
+            st.subheader("📈 Statistik Anomali Bouguer Final")
+            
+            col1, col2, col3, col4 = st.columns(4)
+            with col1:
+                st.metric("Min CBA", f"{df_all['Complete Bouger Anomaly Final'].min():.1f} mGal")
+            with col2:
+                st.metric("Max CBA", f"{df_all['Complete Bouger Anomaly Final'].max():.1f} mGal")
+            with col3:
+                st.metric("Mean CBA", f"{df_all['Complete Bouger Anomaly Final'].mean():.1f} mGal")
+            with col4:
+                st.metric("Std Dev CBA", f"{df_all['Complete Bouger Anomaly Final'].std():.1f} mGal")
+            
+            # Plot distribusi CBA final
+            fig_cba_final, ax_cba_final = plt.subplots(figsize=(10, 5))
+            ax_cba_final.hist(df_all['Complete Bouger Anomaly Final'], bins=30, 
+                             alpha=0.7, edgecolor='black', color='green')
+            ax_cba_final.axvline(df_all['Complete Bouger Anomaly Final'].mean(), 
+                               color='red', linestyle='--',
+                               label=f'Mean: {df_all["Complete Bouger Anomaly Final"].mean():.1f} mGal')
+            ax_cba_final.set_xlabel('Complete Bouguer Anomaly (mGal)')
+            ax_cba_final.set_ylabel('Frequency')
+            ax_cba_final.set_title(f'Distribusi CBA Final (ρ = {final_density:.3f} g/cm³)')
+            ax_cba_final.legend()
+            ax_cba_final.grid(True, alpha=0.3)
+            st.pyplot(fig_cba_final)
+            
+            # Simpan densitas final ke session state
+            st.session_state.final_density = final_density
+            st.session_state.density_results = density_results
             
     else:
         st.warning("Harap proses data terlebih dahulu di tab utama.")
@@ -1786,6 +1801,7 @@ with st.sidebar.expander("Koreksi yang dilakukan"):
     4. **Debug function** for high slopes
     5. **Keep original X-Parasnis formula**: X = 0.04192 * Elev - TC
     """)
+
 
 
 
