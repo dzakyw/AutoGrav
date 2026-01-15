@@ -337,23 +337,27 @@ class OSSTerrainCorrector:
         self.theta_deg = np.degrees(self.theta_rad) % 360.0
         
         # z = ABSOLUTE terrain elevation (DEM height), not difference!
-        self.z_abs = self.dem_df['Elev'].values
+        # Store as numpy array for consistency
+        self.z_abs = self.dem_df['Elev'].to_numpy()
         
         if self.params.get('debug', False):
             st.write(f"🚨 DEBUG: Station elevation z0 = {self.z0:.1f} m")
             st.write(f"🚨 DEBUG: Terrain elevation z = {self.z_abs.min():.1f} to {self.z_abs.max():.1f} m")
             st.write(f"🚨 DEBUG: Mean terrain elevation = {np.mean(self.z_abs):.1f} m")
         
+        # Apply radius filter
         mask = self.r <= self.params['max_radius']
-        self.r_filtered = self.r[mask].values
-        self.theta_filtered = self.theta_deg[mask].values
-        self.z_filtered = self.z_abs[mask].values  # Use absolute elevation
+        
+        # Create filtered arrays - CORRECTED
+        self.r_filtered = self.r[mask].to_numpy() if hasattr(self.r[mask], 'to_numpy') else self.r[mask].values
+        self.theta_filtered = self.theta_deg[mask].to_numpy() if hasattr(self.theta_deg[mask], 'to_numpy') else self.theta_deg[mask].values
+        self.z_filtered = self.z_abs[mask]  # Direct indexing works since z_abs is numpy array
         
         if self.params.get('debug', False):
             st.write(f"🚨 DEBUG: Points within radius: {len(self.r_filtered)}")
             if len(self.z_filtered) > 0:
                 st.write(f"🚨 DEBUG: Filtered z range: {self.z_filtered.min():.1f} to {self.z_filtered.max():.1f} m")
-    
+                
     def _sector_effect(self, R1, R2, theta1, theta2, z_avg):
         """Wrapper untuk terrain_effect_cylindrical_sector dengan absolute z"""
         return terrain_effect_cylindrical_sector(
@@ -1878,3 +1882,4 @@ with st.sidebar.expander("Koreksi yang dilakukan"):
     4. **Debug function** for high slopes
     5. **Keep original X-Parasnis formula**: X = 0.04192 * Elev - TC
     """)
+
