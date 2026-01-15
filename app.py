@@ -1550,7 +1550,7 @@ if run:
     
     # TABS
     st.subheader("Visualisasi Hasil")
-    tab1, tab2, tab3, tab4, tab5 = st.tabs(["Parasnis Plot", "Topography", "CBA Map", "Analisis Densitas", "Data Export"])
+    tab1, tab2, tab3, tab4, tab5 = st.tabs(["Parasnis Plot", "Topography","Analisis Densitas","CBA Map","Data Export"])
 
     with tab1:
         if mask.sum() >= 2:
@@ -1597,7 +1597,7 @@ if run:
         else:
             st.info("No DEM available for topography plot.")
     
-    with tab3:
+    with tab4:
         if len(df_all) > 0:
             fig_cba = plot_cont(df_all["Easting"], df_all["Northing"], 
                                df_all["Complete Bouger Anomaly Optimal"], 
@@ -1607,7 +1607,7 @@ if run:
             st.warning("No data available for CBA plot.")
     
     # Tab 4: Analisis Densitas
-    with tab4:
+    with tab3:
         st.header("📊 Analisis Densitas Komprehensif")
     
     if 'df_all' in locals() and len(df_all) > 0:
@@ -1736,6 +1736,7 @@ with st.sidebar.expander("Koreksi yang dilakukan"):
     4. **Debug function** for high slopes
     5. **Keep original X-Parasnis formula**: X = 0.04192 * Elev - TC
     """)
+
 
 
 
